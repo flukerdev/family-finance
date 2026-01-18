@@ -255,6 +255,27 @@ export default function App() {
     });
   };
 
+  // Find when a statement was paid off (first occurrence of 0 balance)
+  const findPaymentDate = (cardType) => {
+    if (!snapshots || snapshots.length === 0) return null;
+
+    const fieldName = `${cardType}_statement`;
+
+    // Sort snapshots by date ascending (oldest first)
+    const sortedSnapshots = [...snapshots].sort((a, b) =>
+      new Date(a.created_at) - new Date(b.created_at)
+    );
+
+    // Find first snapshot where statement is 0
+    const paidSnapshot = sortedSnapshots.find(s => s[fieldName] === 0);
+
+    if (paidSnapshot) {
+      return new Date(paidSnapshot.created_at);
+    }
+
+    return null;
+  };
+
   // Calculate when an account will have enough to cover a payment
   const calculatePaymentDate = (accountType, startBalance, statementAmount, dueDate) => {
     if (statementAmount === 0) {
@@ -320,10 +341,10 @@ export default function App() {
       billsMax: 40,
       personalScore: 0,
       personalMax: 20,
-      liveBufferScore: 0,
-      liveBufferMax: 15,
-      daysUntilFundsScore: 0,
-      daysUntilFundsMax: 25,
+      kickbackScore: 0,
+      kickbackMax: 15,
+      promptPaymentsScore: 0,
+      promptPaymentsMax: 25,
       details: {}
     };
 
@@ -453,49 +474,84 @@ export default function App() {
     scoreBreakdown.personalScore = personalPoints;
     scoreBreakdown.details.personal = `Mat: $${latestSnapshot.mat.toFixed(2)}, Mara: $${latestSnapshot.mara.toFixed(2)}`;
 
-    // SCORING: 15 points for LIVE buffer
-    const liveBuffer = latestSnapshot.live;
-    if (liveBuffer >= 150) scoreBreakdown.liveBufferScore = 15;
-    else if (liveBuffer >= 100) scoreBreakdown.liveBufferScore = 10;
-    else if (liveBuffer >= 50) scoreBreakdown.liveBufferScore = 5;
-    else {
-      scoreBreakdown.liveBufferScore = 0;
-      alerts.push({ severity: 'warning', message: `LIVE buffer is critically low ($${liveBuffer.toFixed(2)})`, details: 'Recommended minimum: $150' });
+    // SCORING: 15 points for Kickback Indicator
+    const kickbackProjection = calculateProjectedKickback();
+    if (kickbackProjection) {
+      const kickbackAmount = kickbackProjection.potentialKickback;
+      if (kickbackAmount >= 200) scoreBreakdown.kickbackScore = 15;
+      else if (kickbackAmount >= 100) scoreBreakdown.kickbackScore = 10;
+      else if (kickbackAmount > 0) scoreBreakdown.kickbackScore = 5;
+      else scoreBreakdown.kickbackScore = 0;
+
+      scoreBreakdown.details.kickback = `Projected kickback: $${kickbackAmount.toFixed(2)} (Target: $200+)`;
+    } else {
+      scoreBreakdown.kickbackScore = 0;
+      scoreBreakdown.details.kickback = 'Unable to calculate kickback projection';
     }
-    scoreBreakdown.details.liveBuffer = `Current LIVE balance: $${liveBuffer.toFixed(2)} (Target: $150+)`;
 
-    // SCORING: 25 points for days until funds available
-    let daysScore = 0;
-    let totalDaysEarly = 0;
-    let billsWithFunds = 0;
+    // SCORING: 25 points for Prompt Payments
+    // Find when each statement was paid off (if paid)
+    const paymentDates = {
+      discover: findPaymentDate('discover'),
+      gold: findPaymentDate('gold'),
+      blue: findPaymentDate('blue')
+    };
 
-    for (const check of billChecks) {
-      if (check.canPay && check.statement > 0) {
-        const daysEarly = Math.ceil((check.dueDate - check.dateAvailable) / (1000 * 60 * 60 * 24));
-        totalDaysEarly += Math.max(0, daysEarly);
-        billsWithFunds++;
+    // Check how many cards are paid and how early
+    const cardPaymentInfo = [];
+
+    if (nextDiscover) {
+      if (latestSnapshot.discover_statement === 0 && paymentDates.discover) {
+        const daysEarly = Math.ceil((nextDiscover.date - paymentDates.discover) / (1000 * 60 * 60 * 24));
+        cardPaymentInfo.push({ card: 'discover', daysEarly });
       }
     }
 
-    if (billsWithFunds > 0) {
-      const avgDaysEarly = totalDaysEarly / billsWithFunds;
-      if (avgDaysEarly >= 7) daysScore = 25;
-      else if (avgDaysEarly >= 5) daysScore = 20;
-      else if (avgDaysEarly >= 3) daysScore = 15;
-      else if (avgDaysEarly >= 1) daysScore = 10;
-      else daysScore = 5;
+    if (nextGold) {
+      if (latestSnapshot.gold_statement === 0 && paymentDates.gold) {
+        const daysEarly = Math.ceil((nextGold.date - paymentDates.gold) / (1000 * 60 * 60 * 24));
+        cardPaymentInfo.push({ card: 'gold', daysEarly });
+      }
     }
 
-    scoreBreakdown.daysUntilFundsScore = daysScore;
-    scoreBreakdown.details.daysUntilFunds = billsWithFunds > 0
-      ? `Average ${(totalDaysEarly / billsWithFunds).toFixed(1)} days early across ${billsWithFunds} bill(s)`
-      : 'No upcoming bills with payments needed';
+    if (nextBlue) {
+      if (latestSnapshot.blue_statement === 0 && paymentDates.blue) {
+        const daysEarly = Math.ceil((nextBlue.date - paymentDates.blue) / (1000 * 60 * 60 * 24));
+        cardPaymentInfo.push({ card: 'blue', daysEarly });
+      }
+    }
+
+    const paidCount = cardPaymentInfo.length;
+    const allPaidOverWeekEarly = cardPaymentInfo.every(info => info.daysEarly >= 7);
+    const allPaidWithinWeek = cardPaymentInfo.every(info => info.daysEarly >= 0);
+
+    let promptScore = 0;
+    if (paidCount === 3 && allPaidOverWeekEarly) {
+      promptScore = 25;
+    } else if (paidCount === 3 && allPaidWithinWeek) {
+      promptScore = 15;
+    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 7)) {
+      promptScore = 17;
+    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 0)) {
+      promptScore = 10;
+    } else if (paidCount === 1 && cardPaymentInfo[0].daysEarly >= 7) {
+      promptScore = 8;
+    } else if (paidCount === 1) {
+      promptScore = 5;
+    } else {
+      promptScore = 0;
+    }
+
+    scoreBreakdown.promptPaymentsScore = promptScore;
+    scoreBreakdown.details.promptPayments = paidCount > 0
+      ? `${paidCount} of 3 cards paid off (Avg ${(cardPaymentInfo.reduce((sum, info) => sum + info.daysEarly, 0) / paidCount).toFixed(1)} days early)`
+      : 'No cards have been paid off yet';
 
     const totalScore = Math.round(
       scoreBreakdown.billsScore +
       scoreBreakdown.personalScore +
-      scoreBreakdown.liveBufferScore +
-      scoreBreakdown.daysUntilFundsScore
+      scoreBreakdown.kickbackScore +
+      scoreBreakdown.promptPaymentsScore
     );
 
     return { score: totalScore, alerts, positives, scoreBreakdown };
@@ -738,15 +794,15 @@ export default function App() {
                 </div>
                 <div style={styles.detailsSubtext}>{scoreBreakdown.details.personal}</div>
                 <div style={styles.detailsRow}>
-                  <span>LIVE Buffer:</span>
-                  <span>{scoreBreakdown.liveBufferScore.toFixed(1)} / {scoreBreakdown.liveBufferMax}</span>
+                  <span>Kickback Indicator:</span>
+                  <span>{scoreBreakdown.kickbackScore.toFixed(1)} / {scoreBreakdown.kickbackMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.liveBuffer}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.kickback}</div>
                 <div style={styles.detailsRow}>
-                  <span>Days Until Funds:</span>
-                  <span>{scoreBreakdown.daysUntilFundsScore.toFixed(1)} / {scoreBreakdown.daysUntilFundsMax}</span>
+                  <span>Prompt Payments:</span>
+                  <span>{scoreBreakdown.promptPaymentsScore.toFixed(1)} / {scoreBreakdown.promptPaymentsMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.daysUntilFunds}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.promptPayments}</div>
                 <div style={styles.detailsDivider} />
                 <div style={styles.detailsRow}>
                   <span style={styles.detailsTotalLabel}>Total Score:</span>
@@ -822,70 +878,301 @@ export default function App() {
             </section>
           )}
 
-          {/* Account Balances */}
+          {/* Account Balances & Credit Cards Combined */}
           {latestSnapshot && (
             <section style={styles.balancesSection}>
-              <h2 style={styles.sectionTitle}>Account Balances</h2>
-              <div style={styles.balancesGrid}>
-                {[
-                  { label: 'Give', value: latestSnapshot.give, color: '#8b5cf6' },
-                  { label: 'Save', value: latestSnapshot.save, color: '#10b981' },
-                  { label: 'Live', value: latestSnapshot.live, color: '#3b82f6' },
-                  { label: 'Mat', value: latestSnapshot.mat, color: '#f59e0b' },
-                  { label: 'Mara', value: latestSnapshot.mara, color: '#ec4899' },
-                ].map(account => (
-                  <div key={account.label} style={styles.balanceCard}>
-                    <span style={{ ...styles.balanceLabel, color: account.color }}>{account.label}</span>
-                    <span style={styles.balanceValue}>${account.value.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+              <h2 style={styles.sectionTitle}>Accounts Overview</h2>
+              <div style={styles.accountsGrid}>
+                {/* Give Account - No Card */}
+                <div style={styles.accountWithCard}>
+                  <div style={styles.accountBalanceCard}>
+                    <span style={{ ...styles.balanceLabel, color: '#8b5cf6' }}>Give</span>
+                    <span style={styles.balanceValue}>${latestSnapshot.give.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                   </div>
-                ))}
+                </div>
+
+                {/* Save Account - No Card */}
+                <div style={styles.accountWithCard}>
+                  <div style={styles.accountBalanceCard}>
+                    <span style={{ ...styles.balanceLabel, color: '#10b981' }}>Save</span>
+                    <span style={styles.balanceValue}>${latestSnapshot.save.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+
+                {/* Live Account + Blue Amex */}
+                <div style={styles.accountWithCard}>
+                  <div style={styles.accountBalanceCard}>
+                    <span style={{ ...styles.balanceLabel, color: '#3b82f6' }}>Live</span>
+                    <span style={styles.balanceValue}>${latestSnapshot.live.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div style={styles.linkedCardIndicator}>→ Pays Blue Amex</div>
+                  <div style={styles.linkedCard}>
+                    <div style={styles.linkedCardHeader}>
+                      <span style={styles.linkedCardName}>Blue Amex</span>
+                      <span style={styles.linkedCardDue}>Due: 8th</span>
+                    </div>
+                    <div style={styles.linkedCardBalances}>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Total</span>
+                        <span style={styles.linkedCardValue}>${latestSnapshot.blue_total.toFixed(2)}</span>
+                      </div>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Statement</span>
+                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.blue_statement === 0 ? '#10b981' : '#f59e0b' }}>
+                          ${latestSnapshot.blue_statement.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    {latestSnapshot.blue_statement === 0 && (
+                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Mat Account + Gold Amex */}
+                <div style={styles.accountWithCard}>
+                  <div style={styles.accountBalanceCard}>
+                    <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Mat</span>
+                    <span style={styles.balanceValue}>${latestSnapshot.mat.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div style={styles.linkedCardIndicator}>→ Pays Gold Amex</div>
+                  <div style={styles.linkedCard}>
+                    <div style={styles.linkedCardHeader}>
+                      <span style={styles.linkedCardName}>Gold Amex</span>
+                      <span style={styles.linkedCardDue}>Due: 15th</span>
+                    </div>
+                    <div style={styles.linkedCardBalances}>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Total</span>
+                        <span style={styles.linkedCardValue}>${latestSnapshot.gold_total.toFixed(2)}</span>
+                      </div>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Statement</span>
+                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.gold_statement === 0 ? '#10b981' : '#f59e0b' }}>
+                          ${latestSnapshot.gold_statement.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    {latestSnapshot.gold_statement === 0 && (
+                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Mara Account + Discover */}
+                <div style={styles.accountWithCard}>
+                  <div style={styles.accountBalanceCard}>
+                    <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Mara</span>
+                    <span style={styles.balanceValue}>${latestSnapshot.mara.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div style={styles.linkedCardIndicator}>→ Pays Discover</div>
+                  <div style={styles.linkedCard}>
+                    <div style={styles.linkedCardHeader}>
+                      <span style={styles.linkedCardName}>Discover</span>
+                      <span style={styles.linkedCardDue}>Due: 2nd</span>
+                    </div>
+                    <div style={styles.linkedCardBalances}>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Total</span>
+                        <span style={styles.linkedCardValue}>${latestSnapshot.discover_total.toFixed(2)}</span>
+                      </div>
+                      <div style={styles.linkedCardBalanceItem}>
+                        <span style={styles.linkedCardLabel}>Statement</span>
+                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.discover_statement === 0 ? '#10b981' : '#f59e0b' }}>
+                          ${latestSnapshot.discover_statement.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    {latestSnapshot.discover_statement === 0 && (
+                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
+                    )}
+                  </div>
+                </div>
               </div>
             </section>
           )}
 
-          {/* Credit Cards */}
-          {latestSnapshot && (
-            <section style={styles.cardsSection}>
-              <h2 style={styles.sectionTitle}>Credit Cards (Sorted by Next Due)</h2>
-              <div style={styles.cardsGrid}>
-                {getSortedCreditCards().map(card => (
-                  <div key={card.type} style={styles.cardItem}>
-                    <div style={styles.cardItemHeader}>
-                      <span style={styles.cardName}>{card.name}</span>
-                      <span style={styles.cardDue}>
-                        Due: {card.dueDay}{card.dueDay === 2 ? 'nd' : card.dueDay === 8 ? 'th' : 'th'} → {card.account}
-                      </span>
+          {/* Kickback Projection */}
+          {latestSnapshot && (() => {
+            const kickbackProjection = calculateProjectedKickback();
+            if (!kickbackProjection) return null;
+            return (
+              <section style={styles.kickbackProjectionSection}>
+                <h2 style={styles.sectionTitle}>End-of-Month Projection</h2>
+                {kickbackProjection.potentialKickback > 0 ? (
+                  <div style={styles.kickbackSection}>
+                    <div style={styles.kickbackAlert}>
+                      🎉 Projected Kickback: ${kickbackProjection.potentialKickback.toFixed(2)} (${kickbackProjection.kickbackEach.toFixed(2)} each!)
                     </div>
-                    <div style={styles.cardItemBalances}>
-                      <div style={styles.cardBalanceItem}>
-                        <span style={styles.cardBalanceLabel}>Total Balance</span>
-                        <span style={styles.cardBalanceValue}>${card.total.toFixed(2)}</span>
-                      </div>
-                      <div style={styles.cardBalanceItem}>
-                        <span style={styles.cardBalanceLabel}>Statement Due</span>
-                        <span style={{
-                          ...styles.cardBalanceValue,
-                          color: card.statement === 0 ? '#10b981' : '#f59e0b'
-                        }}>
-                          ${card.statement.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                    {card.statement === 0 && card.total > 0 && (
-                      <div style={styles.cardPaidBadge}>
-                        ✓ Statement Paid
-                      </div>
-                    )}
-                    {card.statement === 0 && card.total === 0 && (
-                      <div style={styles.cardPaidBadge}>
-                        ✓ Fully Paid Off
+                    <button
+                      onClick={() => setExpandedDetails(prev => ({ ...prev, dashboardKickback: !prev.dashboardKickback }))}
+                      style={styles.detailsButtonSmall}
+                    >
+                      {expandedDetails.dashboardKickback ? 'Hide' : 'Show'} Calculation Details
+                    </button>
+                    {expandedDetails.dashboardKickback && (
+                      <div style={styles.kickbackDetails}>
+                        <h4 style={styles.kickbackDetailsTitle}>How this was calculated:</h4>
+                        <div style={styles.kickbackDetailRow}>
+                          <span>Current LIVE balance:</span>
+                          <span>${kickbackProjection.details.startingBalance.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.kickbackDetailRow}>
+                          <span>+ Projected paychecks (LIVE portion):</span>
+                          <span>+${kickbackProjection.details.projectedInflows.toFixed(2)}</span>
+                        </div>
+                        {kickbackProjection.details.rent > 0 && (
+                          <div style={styles.kickbackDetailRow}>
+                            <span>- Rent payment:</span>
+                            <span>-${kickbackProjection.details.rent.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {kickbackProjection.details.blueAmex > 0 && (
+                          <div style={styles.kickbackDetailRow}>
+                            <span>- Blue Amex payment:</span>
+                            <span>-${kickbackProjection.details.blueAmex.toFixed(2)}</span>
+                          </div>
+                        )}
+                        <div style={styles.kickbackDetailRow}>
+                          <span>- Projected remaining expenses ({kickbackProjection.details.daysRemaining} days):</span>
+                          <span>-${kickbackProjection.details.projectedRemainingExpenses.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.kickbackDetailRow}>
+                          <span>- Safety buffer:</span>
+                          <span>-${kickbackProjection.details.safetyBuffer.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.kickbackDivider} />
+                        <div style={styles.kickbackDetailRow}>
+                          <span style={styles.kickbackTotalLabel}>Projected LIVE at month end:</span>
+                          <span style={styles.kickbackTotalValue}>${kickbackProjection.projectedLive.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.kickbackDetailRow}>
+                          <span style={styles.kickbackTotalLabel}>Available for kickback:</span>
+                          <span style={styles.kickbackTotalValue}>${kickbackProjection.potentialKickback.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.kickbackDetailRow}>
+                          <span style={styles.kickbackEachLabel}>Each person gets:</span>
+                          <span style={styles.kickbackEachValue}>${kickbackProjection.kickbackEach.toFixed(2)}</span>
+                        </div>
+                        <p style={styles.kickbackNote}>
+                          Month is {kickbackProjection.details.monthProgress}% complete
+                        </p>
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
+                ) : (
+                  <div style={styles.noKickbackAlert}>
+                    No kickback projected this month. Projected LIVE at month end: ${kickbackProjection.projectedLive.toFixed(2)}
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+
+          {/* Anticipated Payments */}
+          {latestSnapshot && (() => {
+            const bills = getUpcomingBills();
+            const cards = [
+              {
+                type: 'discover',
+                name: 'Discover',
+                account: 'Mara',
+                statement: latestSnapshot.discover_statement,
+                dueDate: bills.find(b => b.type === 'discover')?.date
+              },
+              {
+                type: 'gold',
+                name: 'Gold Amex',
+                account: 'Mat',
+                statement: latestSnapshot.gold_statement,
+                dueDate: bills.find(b => b.type === 'gold')?.date
+              },
+              {
+                type: 'blue',
+                name: 'Blue Amex',
+                account: 'LIVE',
+                statement: latestSnapshot.blue_statement,
+                dueDate: bills.find(b => b.type === 'blue')?.date
+              },
+            ];
+
+            return (
+              <section style={styles.anticipatedSection}>
+                <h2 style={styles.sectionTitle}>Anticipated Payments</h2>
+                <div style={styles.anticipatedGrid}>
+                  {cards.map(card => {
+                    if (card.statement === 0) {
+                      const paidDate = findPaymentDate(card.type);
+                      return (
+                        <div key={card.type} style={styles.anticipatedItem}>
+                          <div style={styles.anticipatedHeader}>
+                            <span style={styles.anticipatedCardName}>{card.name}</span>
+                            <span style={styles.anticipatedPaidBadge}>✓ Paid</span>
+                          </div>
+                          <div style={styles.anticipatedDetails}>
+                            {paidDate ? (
+                              <span style={styles.anticipatedDateGreen}>
+                                Paid on {paidDate.toLocaleDateString()}
+                              </span>
+                            ) : (
+                              <span style={styles.anticipatedDateGreen}>Statement balance: $0.00</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const accountType = card.account.toLowerCase();
+                    const startBalance = latestSnapshot[accountType];
+                    const paymentCalc = calculatePaymentDate(accountType, startBalance, card.statement, card.dueDate);
+
+                    const canPayBeforeDue = paymentCalc.canPay && paymentCalc.dateAvailable <= card.dueDate;
+
+                    return (
+                      <div key={card.type} style={styles.anticipatedItem}>
+                        <div style={styles.anticipatedHeader}>
+                          <span style={styles.anticipatedCardName}>{card.name}</span>
+                          <span style={styles.anticipatedAmount}>${card.statement.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.anticipatedDetails}>
+                          {paymentCalc.canPay ? (
+                            <>
+                              <span style={canPayBeforeDue ? styles.anticipatedDateGreen : styles.anticipatedDateRed}>
+                                Funds available: {paymentCalc.dateAvailable.toLocaleDateString()}
+                              </span>
+                              <span style={styles.anticipatedDue}>
+                                Due: {card.dueDate.toLocaleDateString()}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span style={styles.anticipatedDateRed}>
+                                Insufficient funds by due date
+                              </span>
+                              <span style={styles.anticipatedDue}>
+                                Due: {card.dueDate.toLocaleDateString()}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setExpandedDetails(prev => ({ ...prev, [`anticipated-${card.type}`]: !prev[`anticipated-${card.type}`] }))}
+                          style={styles.detailsButtonSmall}
+                        >
+                          {expandedDetails[`anticipated-${card.type}`] ? 'Hide' : 'Show'} Details
+                        </button>
+                        {expandedDetails[`anticipated-${card.type}`] && (
+                          <div style={styles.anticipatedDetailsBox}>
+                            {paymentCalc.details}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })()}
 
           {/* Timeline */}
           <section style={styles.timelineSection}>
@@ -1347,6 +1634,152 @@ const styles = {
   },
   balancesSection: {
     marginBottom: '1.5rem',
+  },
+  accountsGrid: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem',
+  },
+  accountWithCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  accountBalanceCard: {
+    padding: '1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+  },
+  linkedCardIndicator: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    paddingLeft: '1rem',
+    fontStyle: 'italic',
+  },
+  linkedCard: {
+    marginLeft: '1rem',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.5rem',
+    borderLeft: '3px solid #334155',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  linkedCardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  linkedCardName: {
+    fontSize: '0.75rem',
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  linkedCardDue: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+  },
+  linkedCardBalances: {
+    display: 'flex',
+    gap: '0.5rem',
+  },
+  linkedCardBalanceItem: {
+    flex: 1,
+    padding: '0.5rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.375rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+  },
+  linkedCardLabel: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    textTransform: 'uppercase',
+  },
+  linkedCardValue: {
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  linkedCardPaidBadge: {
+    fontSize: '0.625rem',
+    color: '#10b981',
+    backgroundColor: '#022c22',
+    padding: '0.25rem 0.5rem',
+    borderRadius: '0.25rem',
+    textAlign: 'center',
+  },
+  kickbackProjectionSection: {
+    marginBottom: '1.5rem',
+  },
+  anticipatedSection: {
+    marginBottom: '1.5rem',
+  },
+  anticipatedGrid: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem',
+  },
+  anticipatedItem: {
+    padding: '1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  anticipatedHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  anticipatedCardName: {
+    fontWeight: '600',
+    fontSize: '0.875rem',
+  },
+  anticipatedAmount: {
+    fontWeight: '600',
+    color: '#f59e0b',
+  },
+  anticipatedPaidBadge: {
+    fontSize: '0.75rem',
+    color: '#10b981',
+    backgroundColor: '#022c22',
+    padding: '0.25rem 0.5rem',
+    borderRadius: '0.25rem',
+  },
+  anticipatedDetails: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+  },
+  anticipatedDateGreen: {
+    fontSize: '0.75rem',
+    color: '#10b981',
+    fontWeight: '500',
+  },
+  anticipatedDateRed: {
+    fontSize: '0.75rem',
+    color: '#ef4444',
+    fontWeight: '500',
+  },
+  anticipatedDue: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+  },
+  anticipatedDetailsBox: {
+    marginTop: '0.5rem',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+    fontStyle: 'italic',
   },
   balancesGrid: {
     display: 'grid',
