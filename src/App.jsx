@@ -63,6 +63,14 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [showScoreDetails, setShowScoreDetails] = useState(false);
   const [expandedDetails, setExpandedDetails] = useState({});
+  const [collapsedSections, setCollapsedSections] = useState({
+    suggestions: true,
+    alerts: false,
+    positives: false,
+    upcoming: true,
+    anticipated: true
+  });
+  const [hoveredSuggestion, setHoveredSuggestion] = useState(null);
 
   // Fetch latest snapshot on load
   useEffect(() => {
@@ -330,6 +338,150 @@ export default function App() {
     };
   };
 
+  // Calculate disposable income for Mat or Mara
+  const calculateDisposableIncome = (person) => {
+    if (!latestSnapshot) return null;
+
+    const accountBalance = latestSnapshot[person.toLowerCase()];
+    const cushion = 150;
+
+    // Determine which card this person pays
+    let cardType, cardStatement, cardTotal, nextDueDate;
+    const bills = getUpcomingBills();
+
+    if (person === 'mat') {
+      cardType = 'gold';
+      cardStatement = latestSnapshot.gold_statement || 0;
+      cardTotal = latestSnapshot.gold_total || 0;
+      nextDueDate = bills.find(b => b.type === 'gold')?.date;
+    } else if (person === 'mara') {
+      cardType = 'discover';
+      cardStatement = latestSnapshot.discover_statement || 0;
+      cardTotal = latestSnapshot.discover_total || 0;
+      nextDueDate = bills.find(b => b.type === 'discover')?.date;
+    } else {
+      return null;
+    }
+
+    if (!nextDueDate) return null;
+
+    // Calculate paychecks before next due date
+    const paydays = getUpcomingPaydays();
+    let futureDeposits = 0;
+
+    for (const payday of paydays) {
+      if (payday.date <= nextDueDate) {
+        if (person === 'mat') {
+          if (payday.type === 'mat') futureDeposits += CONFIG.splits.matPersonalFromMat;
+          if (payday.type === 'mara') futureDeposits += CONFIG.splits.matPersonalFromMara;
+        } else if (person === 'mara') {
+          if (payday.type === 'mat') futureDeposits += CONFIG.splits.maraPersonalFromMat;
+          if (payday.type === 'mara') futureDeposits += CONFIG.splits.maraPersonalFromMara;
+        }
+      }
+    }
+
+    // Next payment amount (if statement is paid, next payment is total - statement)
+    const nextPaymentAmount = cardStatement > 0 ? cardStatement : (cardTotal - cardStatement);
+
+    // Disposable income calculation
+    const disposableIncome = accountBalance - cushion + futureDeposits - nextPaymentAmount;
+
+    return {
+      disposableIncome,
+      accountBalance,
+      cushion,
+      futureDeposits,
+      nextPaymentAmount,
+      cardStatement,
+      cardTotal,
+      nextDueDate,
+      cardType,
+      paydaysBeforeDue: paydays.filter(p => p.date <= nextDueDate)
+    };
+  };
+
+  // Generate detailed calculation breakdown for disposable income
+  const generateDisposableCalculation = (dispData, person) => {
+    if (!dispData) return 'No data available';
+
+    let calc = `Current balance: $${dispData.accountBalance.toFixed(2)}\n`;
+    calc += `- Required cushion: -$${dispData.cushion.toFixed(2)}\n`;
+    calc += `+ Future deposits (until ${dispData.nextDueDate.toLocaleDateString()}): +$${dispData.futureDeposits.toFixed(2)}\n`;
+    dispData.paydaysBeforeDue.forEach(pd => {
+      const amount = person === 'Mat'
+        ? (pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara)
+        : (pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara);
+      calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
+    });
+    calc += `- Next payment (${dispData.cardStatement > 0 ? 'statement' : 'next bill'}): -$${dispData.nextPaymentAmount.toFixed(2)}\n`;
+    if (dispData.cardStatement > 0) {
+      calc += `  Statement balance due on ${dispData.nextDueDate.toLocaleDateString()}\n`;
+    } else {
+      calc += `  Statement paid. Next payment = Total ($${dispData.cardTotal.toFixed(2)}) - Statement ($${dispData.cardStatement.toFixed(2)})\n`;
+    }
+    calc += `\n= Disposable Income: $${dispData.disposableIncome.toFixed(2)}`;
+    return calc;
+  };
+
+  // Generate detailed calculation for bill payments
+  const generateBillPaymentCalculation = (accountType, startBalance, paymentAmount, dueDate, paymentCalc) => {
+    if (!paymentCalc) return 'No calculation available';
+
+    const paydays = getUpcomingPaydays();
+    const relevantPaydays = paydays.filter(p => p.date <= dueDate);
+
+    let calc = `Current ${accountType.toUpperCase()} balance: $${startBalance.toFixed(2)}\n`;
+
+    if (relevantPaydays.length > 0) {
+      const totalInflow = relevantPaydays.reduce((sum, p) => {
+        if (accountType === 'live') {
+          return sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive);
+        } else if (accountType === 'mat') {
+          return sum + (p.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara);
+        } else if (accountType === 'mara') {
+          return sum + (p.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara);
+        }
+        return sum;
+      }, 0);
+
+      calc += `+ Deposits before ${dueDate.toLocaleDateString()}: +$${totalInflow.toFixed(2)}\n`;
+
+      relevantPaydays.forEach(pd => {
+        let amount = 0;
+        if (accountType === 'live') {
+          amount = pd.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive;
+        } else if (accountType === 'mat') {
+          amount = pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara;
+        } else if (accountType === 'mara') {
+          amount = pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara;
+        }
+        calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
+      });
+    }
+
+    calc += `- Payment amount: -$${paymentAmount.toFixed(2)}\n`;
+
+    if (paymentCalc.canPay) {
+      calc += `\n✓ Projected balance: $${paymentCalc.projectedBalance.toFixed(2)}\n`;
+      calc += `✓ Funds available: ${paymentCalc.dateAvailable.toLocaleDateString()}\n`;
+      const daysEarly = Math.ceil((dueDate - paymentCalc.dateAvailable) / (1000 * 60 * 60 * 24));
+      if (daysEarly > 0) {
+        calc += `✓ Can pay ${daysEarly} day${daysEarly !== 1 ? 's' : ''} early`;
+      } else if (daysEarly === 0) {
+        calc += `✓ Can pay on due date`;
+      } else {
+        calc += `⚠ Funds available ${Math.abs(daysEarly)} day${Math.abs(daysEarly) !== 1 ? 's' : ''} after due date`;
+      }
+    } else {
+      calc += `\n✗ Projected balance: $${paymentCalc.projectedBalance.toFixed(2)}\n`;
+      calc += `✗ Shortfall: $${paymentCalc.shortfall.toFixed(2)}\n`;
+      calc += `✗ Will not have enough by ${dueDate.toLocaleDateString()}`;
+    }
+
+    return calc;
+  };
+
   // Calculate projected kickback for end of month
   const calculateProjectedKickback = () => {
     if (!latestSnapshot) return null;
@@ -412,13 +564,13 @@ export default function App() {
       positives: [],
       scoreBreakdown: {
         billsScore: 0,
-        billsMax: 40,
+        billsMax: 60,
         personalScore: 0,
-        personalMax: 20,
+        personalMax: 15,
         kickbackScore: 0,
         kickbackMax: 15,
         promptPaymentsScore: 0,
-        promptPaymentsMax: 25,
+        promptPaymentsMax: 10,
         details: {
           bills: 'No data available',
           personal: 'No data available',
@@ -432,13 +584,13 @@ export default function App() {
     const positives = [];
     const scoreBreakdown = {
       billsScore: 0,
-      billsMax: 40,
+      billsMax: 60,
       personalScore: 0,
-      personalMax: 20,
+      personalMax: 15,
       kickbackScore: 0,
       kickbackMax: 15,
       promptPaymentsScore: 0,
-      promptPaymentsMax: 25,
+      promptPaymentsMax: 10,
       details: {}
     };
 
@@ -474,13 +626,15 @@ export default function App() {
         positives.push({
           message: `Mara is on pace to cover Discover ($${latestSnapshot.discover_statement.toFixed(2)})`,
           details: discoverCheck.details,
+          calculation: generateBillPaymentCalculation('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date, discoverCheck),
           daysEarly
         });
       } else {
         alerts.push({
           severity: 'critical',
           message: `Mara won't have enough for Discover by ${nextDiscover.date.toLocaleDateString()}. Short $${discoverCheck.shortfall.toFixed(2)}.`,
-          details: discoverCheck.details
+          details: discoverCheck.details,
+          calculation: generateBillPaymentCalculation('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date, discoverCheck)
         });
       }
     }
@@ -506,13 +660,15 @@ export default function App() {
         positives.push({
           message: `Mat is on pace to cover Gold Amex ($${latestSnapshot.gold_statement.toFixed(2)})`,
           details: goldCheck.details,
+          calculation: generateBillPaymentCalculation('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date, goldCheck),
           daysEarly
         });
       } else {
         alerts.push({
           severity: 'critical',
           message: `Mat won't have enough for Gold Amex by ${nextGold.date.toLocaleDateString()}. Short $${goldCheck.shortfall.toFixed(2)}.`,
-          details: goldCheck.details
+          details: goldCheck.details,
+          calculation: generateBillPaymentCalculation('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date, goldCheck)
         });
       }
     }
@@ -538,35 +694,94 @@ export default function App() {
         positives.push({
           message: `LIVE is on pace to cover Blue Amex ($${latestSnapshot.blue_statement.toFixed(2)})`,
           details: blueCheck.details,
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date, blueCheck),
           daysEarly
         });
       } else {
         alerts.push({
           severity: 'critical',
           message: `LIVE won't have enough for Blue Amex by ${nextBlue.date.toLocaleDateString()}. Short $${blueCheck.shortfall.toFixed(2)}.`,
-          details: blueCheck.details
+          details: blueCheck.details,
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date, blueCheck)
         });
       }
     }
 
-    // SCORING: 40 points for bills
+    // Check Rent (LIVE)
+    const nextRent = bills.find(b => b.type === 'rent');
+    if (nextRent) {
+      const rentCheck = calculatePaymentDate('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date);
+      billChecks.push({
+        name: 'Rent',
+        account: 'LIVE',
+        dueDate: nextRent.date,
+        statement: CONFIG.monthlyBills.rent,
+        ...rentCheck
+      });
+
+      if (rentCheck.canPay) {
+        const daysEarly = Math.ceil((nextRent.date - rentCheck.dateAvailable) / (1000 * 60 * 60 * 24));
+        positives.push({
+          message: `LIVE is on pace to cover Rent ($${CONFIG.monthlyBills.rent.toFixed(2)})`,
+          details: rentCheck.details,
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date, rentCheck),
+          daysEarly
+        });
+      } else {
+        alerts.push({
+          severity: 'critical',
+          message: `LIVE won't have enough for Rent by ${nextRent.date.toLocaleDateString()}. Short $${rentCheck.shortfall.toFixed(2)}.`,
+          details: rentCheck.details,
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date, rentCheck)
+        });
+      }
+    }
+
+    // SCORING: 60 points for bills
     const billsCovered = billChecks.filter(b => b.canPay).length;
     const totalBills = billChecks.length;
-    scoreBreakdown.billsScore = totalBills > 0 ? (billsCovered / totalBills) * 40 : 40;
+    scoreBreakdown.billsScore = totalBills > 0 ? (billsCovered / totalBills) * 60 : 60;
     scoreBreakdown.details.bills = `${billsCovered} of ${totalBills} upcoming bills can be paid on time`;
 
-    // SCORING: 20 points for personal account health
+    // SCORING: 15 points for personal account health (based on disposable income)
     let personalPoints = 0;
-    if (latestSnapshot.mat >= 50) personalPoints += 10;
-    else if (latestSnapshot.mat >= 20) personalPoints += 5;
-    else alerts.push({ severity: 'info', message: `Mat's personal account is low ($${latestSnapshot.mat.toFixed(2)})`, details: 'Below $50 threshold' });
+    const matDisposable = calculateDisposableIncome('mat');
+    const maraDisposable = calculateDisposableIncome('mara');
 
-    if (latestSnapshot.mara >= 50) personalPoints += 10;
-    else if (latestSnapshot.mara >= 20) personalPoints += 5;
-    else alerts.push({ severity: 'info', message: `Mara's personal account is low ($${latestSnapshot.mara.toFixed(2)})`, details: 'Below $50 threshold' });
+    // Mat's disposable income scoring (max 7.5 points)
+    if (matDisposable && matDisposable.disposableIncome > 0) {
+      if (matDisposable.disposableIncome >= 200) personalPoints += 7.5;
+      else if (matDisposable.disposableIncome >= 100) personalPoints += 6;
+      else if (matDisposable.disposableIncome >= 50) personalPoints += 4;
+      else personalPoints += 2;
+    } else if (matDisposable && matDisposable.disposableIncome < 0) {
+      personalPoints += 0;
+      alerts.push({
+        severity: 'critical',
+        message: `Mat has negative disposable income ($${matDisposable.disposableIncome.toFixed(2)})`,
+        details: `Current balance: $${matDisposable.accountBalance.toFixed(2)}, Next payment: $${matDisposable.nextPaymentAmount.toFixed(2)}, Cushion: $${matDisposable.cushion}`,
+        calculation: generateDisposableCalculation(matDisposable, 'Mat')
+      });
+    }
+
+    // Mara's disposable income scoring (max 7.5 points)
+    if (maraDisposable && maraDisposable.disposableIncome > 0) {
+      if (maraDisposable.disposableIncome >= 200) personalPoints += 7.5;
+      else if (maraDisposable.disposableIncome >= 100) personalPoints += 6;
+      else if (maraDisposable.disposableIncome >= 50) personalPoints += 4;
+      else personalPoints += 2;
+    } else if (maraDisposable && maraDisposable.disposableIncome < 0) {
+      personalPoints += 0;
+      alerts.push({
+        severity: 'critical',
+        message: `Mara has negative disposable income ($${maraDisposable.disposableIncome.toFixed(2)})`,
+        details: `Current balance: $${maraDisposable.accountBalance.toFixed(2)}, Next payment: $${maraDisposable.nextPaymentAmount.toFixed(2)}, Cushion: $${maraDisposable.cushion}`,
+        calculation: generateDisposableCalculation(maraDisposable, 'Mara')
+      });
+    }
 
     scoreBreakdown.personalScore = personalPoints;
-    scoreBreakdown.details.personal = `Mat: $${latestSnapshot.mat.toFixed(2)}, Mara: $${latestSnapshot.mara.toFixed(2)}`;
+    scoreBreakdown.details.personal = `Mat disposable: $${matDisposable ? matDisposable.disposableIncome.toFixed(2) : 'N/A'}, Mara disposable: $${maraDisposable ? maraDisposable.disposableIncome.toFixed(2) : 'N/A'}`;
 
     // SCORING: 15 points for Kickback Indicator
     const kickbackProjection = calculateProjectedKickback();
@@ -583,7 +798,7 @@ export default function App() {
       scoreBreakdown.details.kickback = 'Unable to calculate kickback projection';
     }
 
-    // SCORING: 25 points for Prompt Payments
+    // SCORING: 10 points for Prompt Payments
     // Find when each statement was paid off (if paid)
     const paymentDates = {
       discover: findPaymentDate('discover'),
@@ -621,17 +836,17 @@ export default function App() {
 
     let promptScore = 0;
     if (paidCount === 3 && allPaidOverWeekEarly) {
-      promptScore = 25;
-    } else if (paidCount === 3 && allPaidWithinWeek) {
-      promptScore = 15;
-    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 7)) {
-      promptScore = 17;
-    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 0)) {
       promptScore = 10;
+    } else if (paidCount === 3 && allPaidWithinWeek) {
+      promptScore = 6;
+    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 7)) {
+      promptScore = 7;
+    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 0)) {
+      promptScore = 4;
     } else if (paidCount === 1 && cardPaymentInfo[0].daysEarly >= 7) {
-      promptScore = 8;
+      promptScore = 3;
     } else if (paidCount === 1) {
-      promptScore = 5;
+      promptScore = 2;
     } else {
       promptScore = 0;
     }
@@ -651,8 +866,75 @@ export default function App() {
     return { score: totalScore, alerts, positives, scoreBreakdown };
   };
 
+  // Generate top 3 suggestions to improve health score
+  const generateScoreSuggestions = () => {
+    if (!latestSnapshot) return [];
+
+    const healthData = calculateHealth();
+    const suggestions = [];
+
+    // Suggestion 1: Bills on time (max 40 points)
+    const billsGap = healthData.scoreBreakdown.billsMax - healthData.scoreBreakdown.billsScore;
+    if (billsGap > 0) {
+      suggestions.push({
+        category: 'Bills on Time',
+        currentPoints: healthData.scoreBreakdown.billsScore.toFixed(1),
+        maxPoints: healthData.scoreBreakdown.billsMax,
+        potentialGain: billsGap.toFixed(1),
+        suggestion: 'Ensure all upcoming bills can be paid on time',
+        details: healthData.scoreBreakdown.details.bills
+      });
+    }
+
+    // Suggestion 2: Prompt Payments (max 25 points)
+    const promptGap = healthData.scoreBreakdown.promptPaymentsMax - healthData.scoreBreakdown.promptPaymentsScore;
+    if (promptGap > 0) {
+      suggestions.push({
+        category: 'Prompt Payments',
+        currentPoints: healthData.scoreBreakdown.promptPaymentsScore.toFixed(1),
+        maxPoints: healthData.scoreBreakdown.promptPaymentsMax,
+        potentialGain: promptGap.toFixed(1),
+        suggestion: 'Pay all credit card statements 7+ days before due date',
+        details: healthData.scoreBreakdown.details.promptPayments
+      });
+    }
+
+    // Suggestion 3: Personal Account Health (max 20 points)
+    const personalGap = healthData.scoreBreakdown.personalMax - healthData.scoreBreakdown.personalScore;
+    if (personalGap > 0) {
+      suggestions.push({
+        category: 'Disposable Income',
+        currentPoints: healthData.scoreBreakdown.personalScore.toFixed(1),
+        maxPoints: healthData.scoreBreakdown.personalMax,
+        potentialGain: personalGap.toFixed(1),
+        suggestion: 'Increase disposable income to $200+ for both Mat and Mara',
+        details: healthData.scoreBreakdown.details.personal
+      });
+    }
+
+    // Suggestion 4: Kickback Indicator (max 15 points)
+    const kickbackGap = healthData.scoreBreakdown.kickbackMax - healthData.scoreBreakdown.kickbackScore;
+    if (kickbackGap > 0) {
+      suggestions.push({
+        category: 'Kickback Indicator',
+        currentPoints: healthData.scoreBreakdown.kickbackScore.toFixed(1),
+        maxPoints: healthData.scoreBreakdown.kickbackMax,
+        potentialGain: kickbackGap.toFixed(1),
+        suggestion: 'Reduce expenses to increase end-of-month kickback to $200+',
+        details: healthData.scoreBreakdown.details.kickback
+      });
+    }
+
+    // Sort by potential gain (highest first) and return top 3
+    return suggestions.sort((a, b) => parseFloat(b.potentialGain) - parseFloat(a.potentialGain)).slice(0, 3);
+  };
+
   const { score, alerts, positives, scoreBreakdown } = useMemo(() => {
     return calculateHealth();
+  }, [latestSnapshot, snapshots]);
+
+  const scoreSuggestions = useMemo(() => {
+    return generateScoreSuggestions();
   }, [latestSnapshot, snapshots]);
 
   const getScoreColor = (s) => {
@@ -845,32 +1127,69 @@ export default function App() {
             )}
           </section>
 
+          {/* Score Improvement Suggestions */}
+          {scoreSuggestions.length > 0 && score < 100 && (
+            <section style={styles.suggestionsSection}>
+              <h2 style={styles.sectionTitle}>💡 Ways to Improve Your Score</h2>
+              <div style={styles.suggestionsGrid}>
+                {scoreSuggestions.map((suggestion, i) => (
+                  <div key={i} style={styles.suggestionCard}>
+                    <div style={styles.suggestionHeader}>
+                      <span style={styles.suggestionCategory}>{suggestion.category}</span>
+                      <span style={styles.suggestionGain}>+{suggestion.potentialGain} pts</span>
+                    </div>
+                    <p style={styles.suggestionText}>{suggestion.suggestion}</p>
+                    <div style={styles.suggestionProgress}>
+                      <span style={styles.suggestionCurrent}>{suggestion.currentPoints} / {suggestion.maxPoints}</span>
+                    </div>
+                    <button
+                      onClick={() => setExpandedDetails(prev => ({ ...prev, [`suggestion-${i}`]: !prev[`suggestion-${i}`] }))}
+                      style={styles.detailsButtonSmall}
+                    >
+                      {expandedDetails[`suggestion-${i}`] ? 'Hide' : 'Show'} Current Status
+                    </button>
+                    {expandedDetails[`suggestion-${i}`] && (
+                      <div style={styles.suggestionDetails}>{suggestion.details}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Alerts */}
           {alerts.length > 0 && (
             <section style={styles.alertsSection}>
-              <h2 style={styles.sectionTitle}>⚠️ Attention Needed</h2>
+              <h2 style={{ ...styles.sectionTitle, color: '#ef4444' }}>⚠️ Attention Needed</h2>
               {alerts.map((alert, i) => (
                 <div
                   key={i}
                   style={{
                     ...styles.alert,
-                    borderLeftColor: alert.severity === 'critical' ? '#ef4444' :
-                                     alert.severity === 'warning' ? '#f59e0b' : '#3b82f6'
+                    backgroundColor: '#1e1414',
+                    borderLeftColor: '#ef4444',
+                    borderLeftWidth: '4px'
                   }}
                 >
                   <div style={styles.alertContent}>
-                    <span style={styles.alertMessage}>{alert.message}</span>
-                    {alert.details && (
+                    <span style={{ ...styles.alertMessage, color: '#fca5a5' }}>{alert.message}</span>
+                    {(alert.details || alert.calculation) && (
                       <button
                         onClick={() => setExpandedDetails(prev => ({ ...prev, [`alert-${i}`]: !prev[`alert-${i}`] }))}
                         style={styles.detailsButtonSmall}
                       >
-                        {expandedDetails[`alert-${i}`] ? 'Hide' : 'Details'}
+                        {expandedDetails[`alert-${i}`] ? 'Hide' : 'Show'} Calculation
                       </button>
                     )}
                   </div>
-                  {expandedDetails[`alert-${i}`] && alert.details && (
-                    <div style={styles.alertDetails}>{alert.details}</div>
+                  {expandedDetails[`alert-${i}`] && (
+                    <div style={styles.alertDetails}>
+                      {alert.calculation ? (
+                        <pre style={styles.calculationPre}>{alert.calculation}</pre>
+                      ) : (
+                        alert.details
+                      )}
+                    </div>
                   )}
                 </div>
               ))}
@@ -880,25 +1199,32 @@ export default function App() {
           {/* Positives */}
           {positives.length > 0 && (
             <section style={styles.positivesSection}>
-              <h2 style={styles.sectionTitle}>✓ Looking Good</h2>
+              <h2 style={{ ...styles.sectionTitle, color: '#10b981' }}>✓ Looking Good</h2>
               {positives.map((item, i) => {
                 const msg = typeof item === 'string' ? item : item.message;
                 const details = typeof item === 'object' ? item.details : null;
+                const calculation = typeof item === 'object' ? item.calculation : null;
                 return (
                   <div key={i} style={styles.positive}>
                     <div style={styles.positiveContent}>
                       <span style={styles.positiveMessage}>{msg}</span>
-                      {details && (
+                      {(details || calculation) && (
                         <button
                           onClick={() => setExpandedDetails(prev => ({ ...prev, [`positive-${i}`]: !prev[`positive-${i}`] }))}
                           style={styles.detailsButtonSmall}
                         >
-                          {expandedDetails[`positive-${i}`] ? 'Hide' : 'Details'}
+                          {expandedDetails[`positive-${i}`] ? 'Hide' : 'Show'} Calculation
                         </button>
                       )}
                     </div>
-                    {expandedDetails[`positive-${i}`] && details && (
-                      <div style={styles.positiveDetails}>{details}</div>
+                    {expandedDetails[`positive-${i}`] && (
+                      <div style={styles.positiveDetails}>
+                        {calculation ? (
+                          <pre style={styles.calculationPre}>{calculation}</pre>
+                        ) : (
+                          details
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -962,6 +1288,76 @@ export default function App() {
                   <div style={styles.accountBalanceCard}>
                     <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Mat</span>
                     <span style={styles.balanceValue}>${latestSnapshot.mat.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                    {(() => {
+                      const matDisp = calculateDisposableIncome('mat');
+                      if (!matDisp) return null;
+                      return (
+                        <>
+                          <div style={styles.disposableIncomeSection}>
+                            <span style={styles.disposableLabel}>Disposable Income:</span>
+                            <span style={{
+                              ...styles.disposableValue,
+                              color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                            }}>
+                              ${matDisp.disposableIncome.toFixed(2)}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => setExpandedDetails(prev => ({ ...prev, matDisposable: !prev.matDisposable }))}
+                            style={styles.detailsButtonSmall}
+                          >
+                            {expandedDetails.matDisposable ? 'Hide' : 'Show'} Calculation
+                          </button>
+                          {expandedDetails.matDisposable && (
+                            <div style={styles.disposableDetailsBox}>
+                              <div style={styles.disposableDetailRow}>
+                                <span>Current balance:</span>
+                                <span>${matDisp.accountBalance.toFixed(2)}</span>
+                              </div>
+                              <div style={styles.disposableDetailRow}>
+                                <span>- Required cushion:</span>
+                                <span>-${matDisp.cushion.toFixed(2)}</span>
+                              </div>
+                              <div style={styles.disposableDetailRow}>
+                                <span>+ Future deposits (until {matDisp.nextDueDate.toLocaleDateString()}):</span>
+                                <span>+${matDisp.futureDeposits.toFixed(2)}</span>
+                              </div>
+                              {matDisp.paydaysBeforeDue.map((pd, idx) => (
+                                <div key={idx} style={styles.disposableSubDetail}>
+                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                    pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat.toFixed(2) : CONFIG.splits.matPersonalFromMara.toFixed(2)
+                                  }
+                                </div>
+                              ))}
+                              <div style={styles.disposableDetailRow}>
+                                <span>- Next payment ({matDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
+                                <span>-${matDisp.nextPaymentAmount.toFixed(2)}</span>
+                              </div>
+                              {matDisp.cardStatement > 0 && (
+                                <div style={styles.disposableSubDetail}>
+                                  Statement balance due on {matDisp.nextDueDate.toLocaleDateString()}
+                                </div>
+                              )}
+                              {matDisp.cardStatement === 0 && (
+                                <div style={styles.disposableSubDetail}>
+                                  Statement paid. Next payment = Total (${matDisp.cardTotal.toFixed(2)}) - Statement (${matDisp.cardStatement.toFixed(2)}) = ${matDisp.nextPaymentAmount.toFixed(2)}
+                                </div>
+                              )}
+                              <div style={styles.disposableDivider} />
+                              <div style={styles.disposableDetailRow}>
+                                <span style={styles.disposableTotalLabel}>Available to spend today:</span>
+                                <span style={{
+                                  ...styles.disposableTotalValue,
+                                  color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                                }}>
+                                  ${matDisp.disposableIncome.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   <div style={styles.linkedCardIndicator}>→ Pays Gold Amex</div>
                   <div style={styles.linkedCard}>
@@ -992,6 +1388,76 @@ export default function App() {
                   <div style={styles.accountBalanceCard}>
                     <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Mara</span>
                     <span style={styles.balanceValue}>${latestSnapshot.mara.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                    {(() => {
+                      const maraDisp = calculateDisposableIncome('mara');
+                      if (!maraDisp) return null;
+                      return (
+                        <>
+                          <div style={styles.disposableIncomeSection}>
+                            <span style={styles.disposableLabel}>Disposable Income:</span>
+                            <span style={{
+                              ...styles.disposableValue,
+                              color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                            }}>
+                              ${maraDisp.disposableIncome.toFixed(2)}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => setExpandedDetails(prev => ({ ...prev, maraDisposable: !prev.maraDisposable }))}
+                            style={styles.detailsButtonSmall}
+                          >
+                            {expandedDetails.maraDisposable ? 'Hide' : 'Show'} Calculation
+                          </button>
+                          {expandedDetails.maraDisposable && (
+                            <div style={styles.disposableDetailsBox}>
+                              <div style={styles.disposableDetailRow}>
+                                <span>Current balance:</span>
+                                <span>${maraDisp.accountBalance.toFixed(2)}</span>
+                              </div>
+                              <div style={styles.disposableDetailRow}>
+                                <span>- Required cushion:</span>
+                                <span>-${maraDisp.cushion.toFixed(2)}</span>
+                              </div>
+                              <div style={styles.disposableDetailRow}>
+                                <span>+ Future deposits (until {maraDisp.nextDueDate.toLocaleDateString()}):</span>
+                                <span>+${maraDisp.futureDeposits.toFixed(2)}</span>
+                              </div>
+                              {maraDisp.paydaysBeforeDue.map((pd, idx) => (
+                                <div key={idx} style={styles.disposableSubDetail}>
+                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                    pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat.toFixed(2) : CONFIG.splits.maraPersonalFromMara.toFixed(2)
+                                  }
+                                </div>
+                              ))}
+                              <div style={styles.disposableDetailRow}>
+                                <span>- Next payment ({maraDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
+                                <span>-${maraDisp.nextPaymentAmount.toFixed(2)}</span>
+                              </div>
+                              {maraDisp.cardStatement > 0 && (
+                                <div style={styles.disposableSubDetail}>
+                                  Statement balance due on {maraDisp.nextDueDate.toLocaleDateString()}
+                                </div>
+                              )}
+                              {maraDisp.cardStatement === 0 && (
+                                <div style={styles.disposableSubDetail}>
+                                  Statement paid. Next payment = Total (${maraDisp.cardTotal.toFixed(2)}) - Statement (${maraDisp.cardStatement.toFixed(2)}) = ${maraDisp.nextPaymentAmount.toFixed(2)}
+                                </div>
+                              )}
+                              <div style={styles.disposableDivider} />
+                              <div style={styles.disposableDetailRow}>
+                                <span style={styles.disposableTotalLabel}>Available to spend today:</span>
+                                <span style={{
+                                  ...styles.disposableTotalValue,
+                                  color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                                }}>
+                                  ${maraDisp.disposableIncome.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   <div style={styles.linkedCardIndicator}>→ Pays Discover</div>
                   <div style={styles.linkedCard}>
@@ -1131,6 +1597,7 @@ export default function App() {
                   {cards.map(card => {
                     if (card.statement === 0) {
                       const paidDate = findPaymentDate(card.type);
+                      const daysEarly = paidDate && card.dueDate ? Math.ceil((card.dueDate - paidDate) / (1000 * 60 * 60 * 24)) : null;
                       return (
                         <div key={card.type} style={styles.anticipatedItem}>
                           <div style={styles.anticipatedHeader}>
@@ -1139,9 +1606,16 @@ export default function App() {
                           </div>
                           <div style={styles.anticipatedDetails}>
                             {paidDate ? (
-                              <span style={styles.anticipatedDateGreen}>
-                                Paid on {paidDate.toLocaleDateString()}
-                              </span>
+                              <>
+                                <span style={styles.anticipatedDateGreen}>
+                                  Paid on {paidDate.toLocaleDateString()}
+                                </span>
+                                {daysEarly !== null && daysEarly > 0 && (
+                                  <span style={styles.anticipatedEarlyBadge}>
+                                    {daysEarly} day{daysEarly !== 1 ? 's' : ''} early
+                                  </span>
+                                )}
+                              </>
                             ) : (
                               <span style={styles.anticipatedDateGreen}>Statement balance: $0.00</span>
                             )}
@@ -1603,6 +2077,60 @@ const styles = {
     letterSpacing: '0.05em',
     marginBottom: '1rem',
   },
+  suggestionsSection: {
+    marginBottom: '1.5rem',
+  },
+  suggestionsGrid: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem',
+  },
+  suggestionCard: {
+    padding: '1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    borderLeft: '3px solid #3b82f6',
+  },
+  suggestionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.5rem',
+  },
+  suggestionCategory: {
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  suggestionGain: {
+    fontSize: '0.75rem',
+    fontWeight: '700',
+    color: '#3b82f6',
+    backgroundColor: '#1e3a8a',
+    padding: '0.25rem 0.5rem',
+    borderRadius: '0.25rem',
+  },
+  suggestionText: {
+    fontSize: '0.875rem',
+    color: '#cbd5e1',
+    marginBottom: '0.75rem',
+    lineHeight: '1.4',
+  },
+  suggestionProgress: {
+    marginBottom: '0.5rem',
+  },
+  suggestionCurrent: {
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+  },
+  suggestionDetails: {
+    marginTop: '0.5rem',
+    paddingTop: '0.5rem',
+    borderTop: '1px solid #334155',
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+    fontStyle: 'italic',
+  },
   alertsSection: {
     marginBottom: '1.5rem',
   },
@@ -1626,10 +2154,17 @@ const styles = {
   alertDetails: {
     marginTop: '0.5rem',
     paddingTop: '0.5rem',
-    borderTop: '1px solid #334155',
+    borderTop: '1px solid #450a0a',
     fontSize: '0.75rem',
-    color: '#94a3b8',
+    color: '#fca5a5',
     fontStyle: 'italic',
+  },
+  calculationPre: {
+    fontFamily: 'monospace',
+    fontSize: '0.75rem',
+    lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    margin: 0,
   },
   positivesSection: {
     marginBottom: '1.5rem',
@@ -1742,6 +2277,58 @@ const styles = {
     borderRadius: '0.25rem',
     textAlign: 'center',
   },
+  disposableIncomeSection: {
+    marginTop: '0.75rem',
+    padding: '0.5rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  disposableLabel: {
+    fontSize: '0.625rem',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  disposableValue: {
+    fontSize: '0.875rem',
+    fontWeight: '700',
+  },
+  disposableDetailsBox: {
+    marginTop: '0.5rem',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    fontSize: '0.75rem',
+  },
+  disposableDetailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    marginBottom: '0.5rem',
+    color: '#cbd5e1',
+  },
+  disposableSubDetail: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    marginLeft: '1rem',
+    marginBottom: '0.5rem',
+    fontStyle: 'italic',
+  },
+  disposableDivider: {
+    height: '1px',
+    backgroundColor: '#334155',
+    margin: '0.75rem 0',
+  },
+  disposableTotalLabel: {
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  disposableTotalValue: {
+    fontWeight: '700',
+    fontSize: '0.875rem',
+  },
   kickbackProjectionSection: {
     marginBottom: '1.5rem',
   },
@@ -1780,6 +2367,14 @@ const styles = {
     backgroundColor: '#022c22',
     padding: '0.25rem 0.5rem',
     borderRadius: '0.25rem',
+  },
+  anticipatedEarlyBadge: {
+    fontSize: '0.625rem',
+    color: '#6ee7b7',
+    backgroundColor: '#064e3b',
+    padding: '0.125rem 0.375rem',
+    borderRadius: '0.25rem',
+    marginTop: '0.25rem',
   },
   anticipatedDetails: {
     display: 'flex',
