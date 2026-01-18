@@ -330,6 +330,80 @@ export default function App() {
     };
   };
 
+  // Calculate projected kickback for end of month
+  const calculateProjectedKickback = () => {
+    if (!latestSnapshot) return null;
+
+    // Ensure all required fields exist
+    if (typeof latestSnapshot.live !== 'number' ||
+        typeof latestSnapshot.blue_statement !== 'number') {
+      return null;
+    }
+
+    const today = new Date();
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
+
+    const paydays = getUpcomingPaydays();
+    const bills = getUpcomingBills();
+
+    // Start with current LIVE balance
+    let projectedLive = latestSnapshot.live;
+
+    // Add all paychecks before end of month
+    for (const payday of paydays) {
+      if (payday.date <= endOfMonth) {
+        if (payday.type === 'mat') projectedLive += CONFIG.splits.matLive;
+        if (payday.type === 'mara') projectedLive += CONFIG.splits.maraLive;
+      }
+    }
+
+    // Subtract rent if due this month
+    const rentBill = bills.find(b => b.type === 'rent' && b.date <= endOfMonth);
+    if (rentBill) {
+      projectedLive -= CONFIG.monthlyBills.rent;
+    }
+
+    // Subtract Blue Amex statement if due this month
+    const blueBill = bills.find(b => b.type === 'blue' && b.date <= endOfMonth);
+    if (blueBill) {
+      projectedLive -= latestSnapshot.blue_statement;
+    }
+
+    // Subtract projected remaining monthly expenses
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const dayOfMonth = today.getDate();
+    const daysRemaining = daysInMonth - dayOfMonth;
+    const monthProgress = dayOfMonth / daysInMonth;
+
+    // Calculate how much of monthly budget should be spent so far
+    const monthlyVariableExpenses = CONFIG.monthlyBills.groceries + CONFIG.monthlyBills.gas + CONFIG.monthlyBills.dateNights + CONFIG.monthlyBills.power + CONFIG.monthlyBills.gym + CONFIG.monthlyBills.insurance;
+    const projectedRemainingExpenses = monthlyVariableExpenses * (1 - monthProgress);
+
+    projectedLive -= projectedRemainingExpenses;
+
+    // Kickback is anything above the $150 safety buffer
+    const potentialKickback = Math.max(0, projectedLive - 150);
+    const kickbackEach = potentialKickback / 2;
+
+    return {
+      projectedLive,
+      potentialKickback,
+      kickbackEach,
+      details: {
+        startingBalance: latestSnapshot.live,
+        projectedInflows: paydays.filter(p => p.date <= endOfMonth).reduce((sum, p) =>
+          sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive), 0),
+        rent: rentBill ? CONFIG.monthlyBills.rent : 0,
+        blueAmex: blueBill ? latestSnapshot.blue_statement : 0,
+        projectedRemainingExpenses,
+        safetyBuffer: 150,
+        daysRemaining,
+        monthProgress: (monthProgress * 100).toFixed(1),
+      }
+    };
+  };
+
   // Calculate health score and alerts
   const calculateHealth = () => {
     if (!latestSnapshot) return {
@@ -633,80 +707,6 @@ export default function App() {
       },
       startDate: new Date(weekStart.created_at),
       endDate: new Date(weekEnd.created_at),
-    };
-  };
-
-  // Calculate projected kickback for end of month
-  const calculateProjectedKickback = () => {
-    if (!latestSnapshot) return null;
-
-    // Ensure all required fields exist
-    if (typeof latestSnapshot.live !== 'number' ||
-        typeof latestSnapshot.blue_statement !== 'number') {
-      return null;
-    }
-
-    const today = new Date();
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    endOfMonth.setHours(23, 59, 59, 999);
-
-    const paydays = getUpcomingPaydays();
-    const bills = getUpcomingBills();
-
-    // Start with current LIVE balance
-    let projectedLive = latestSnapshot.live;
-
-    // Add all paychecks before end of month
-    for (const payday of paydays) {
-      if (payday.date <= endOfMonth) {
-        if (payday.type === 'mat') projectedLive += CONFIG.splits.matLive;
-        if (payday.type === 'mara') projectedLive += CONFIG.splits.maraLive;
-      }
-    }
-
-    // Subtract rent if due this month
-    const rentBill = bills.find(b => b.type === 'rent' && b.date <= endOfMonth);
-    if (rentBill) {
-      projectedLive -= CONFIG.monthlyBills.rent;
-    }
-
-    // Subtract Blue Amex statement if due this month
-    const blueBill = bills.find(b => b.type === 'blue' && b.date <= endOfMonth);
-    if (blueBill) {
-      projectedLive -= latestSnapshot.blue_statement;
-    }
-
-    // Subtract projected remaining monthly expenses
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const dayOfMonth = today.getDate();
-    const daysRemaining = daysInMonth - dayOfMonth;
-    const monthProgress = dayOfMonth / daysInMonth;
-
-    // Calculate how much of monthly budget should be spent so far
-    const monthlyVariableExpenses = CONFIG.monthlyBills.groceries + CONFIG.monthlyBills.gas + CONFIG.monthlyBills.dateNights + CONFIG.monthlyBills.power + CONFIG.monthlyBills.gym + CONFIG.monthlyBills.insurance;
-    const projectedRemainingExpenses = monthlyVariableExpenses * (1 - monthProgress);
-
-    projectedLive -= projectedRemainingExpenses;
-
-    // Kickback is anything above the $150 safety buffer
-    const potentialKickback = Math.max(0, projectedLive - 150);
-    const kickbackEach = potentialKickback / 2;
-
-    return {
-      projectedLive,
-      potentialKickback,
-      kickbackEach,
-      details: {
-        startingBalance: latestSnapshot.live,
-        projectedInflows: paydays.filter(p => p.date <= endOfMonth).reduce((sum, p) =>
-          sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive), 0),
-        rent: rentBill ? CONFIG.monthlyBills.rent : 0,
-        blueAmex: blueBill ? latestSnapshot.blue_statement : 0,
-        projectedRemainingExpenses,
-        safetyBuffer: 150,
-        daysRemaining,
-        monthProgress: (monthProgress * 100).toFixed(1),
-      }
     };
   };
 
