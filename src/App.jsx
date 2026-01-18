@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize Supabase client
@@ -577,7 +577,9 @@ export default function App() {
     return { score: totalScore, alerts, positives, scoreBreakdown };
   };
 
-  const { score, alerts, positives, scoreBreakdown } = calculateHealth();
+  const { score, alerts, positives, scoreBreakdown } = useMemo(() => {
+    return calculateHealth();
+  }, [latestSnapshot, snapshots]);
 
   const getScoreColor = (s) => {
     if (s >= 80) return '#10b981';
@@ -2250,9 +2252,17 @@ const styles = {
   },
 };
 
-// Add keyframes for spinner animation
+// Add keyframes for spinner animation and global styles
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  body {
+    background-color: #0f172a;
+  }
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
