@@ -332,7 +332,27 @@ export default function App() {
 
   // Calculate health score and alerts
   const calculateHealth = () => {
-    if (!latestSnapshot) return { score: 0, alerts: [], positives: [], scoreBreakdown: {} };
+    if (!latestSnapshot) return {
+      score: 0,
+      alerts: [],
+      positives: [],
+      scoreBreakdown: {
+        billsScore: 0,
+        billsMax: 40,
+        personalScore: 0,
+        personalMax: 20,
+        kickbackScore: 0,
+        kickbackMax: 15,
+        promptPaymentsScore: 0,
+        promptPaymentsMax: 25,
+        details: {
+          bills: 'No data available',
+          personal: 'No data available',
+          kickback: 'No data available',
+          promptPayments: 'No data available'
+        }
+      }
+    };
 
     const alerts = [];
     const positives = [];
@@ -618,6 +638,12 @@ export default function App() {
   const calculateProjectedKickback = () => {
     if (!latestSnapshot) return null;
 
+    // Ensure all required fields exist
+    if (typeof latestSnapshot.live !== 'number' ||
+        typeof latestSnapshot.blue_statement !== 'number') {
+      return null;
+    }
+
     const today = new Date();
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     endOfMonth.setHours(23, 59, 59, 999);
@@ -780,29 +806,29 @@ export default function App() {
             >
               {expandedDetails.score ? 'Hide' : 'Show'} Details
             </button>
-            {expandedDetails.score && scoreBreakdown && (
+            {expandedDetails.score && scoreBreakdown && scoreBreakdown.details && (
               <div style={styles.detailsBox}>
                 <h3 style={styles.detailsTitle}>Score Breakdown</h3>
                 <div style={styles.detailsRow}>
                   <span>Bills on Time:</span>
-                  <span>{scoreBreakdown.billsScore.toFixed(1)} / {scoreBreakdown.billsMax}</span>
+                  <span>{(scoreBreakdown.billsScore || 0).toFixed(1)} / {scoreBreakdown.billsMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.bills}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.bills || 'N/A'}</div>
                 <div style={styles.detailsRow}>
                   <span>Personal Accounts:</span>
-                  <span>{scoreBreakdown.personalScore.toFixed(1)} / {scoreBreakdown.personalMax}</span>
+                  <span>{(scoreBreakdown.personalScore || 0).toFixed(1)} / {scoreBreakdown.personalMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.personal}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.personal || 'N/A'}</div>
                 <div style={styles.detailsRow}>
                   <span>Kickback Indicator:</span>
-                  <span>{scoreBreakdown.kickbackScore.toFixed(1)} / {scoreBreakdown.kickbackMax}</span>
+                  <span>{(scoreBreakdown.kickbackScore || 0).toFixed(1)} / {scoreBreakdown.kickbackMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.kickback}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.kickback || 'N/A'}</div>
                 <div style={styles.detailsRow}>
                   <span>Prompt Payments:</span>
-                  <span>{scoreBreakdown.promptPaymentsScore.toFixed(1)} / {scoreBreakdown.promptPaymentsMax}</span>
+                  <span>{(scoreBreakdown.promptPaymentsScore || 0).toFixed(1)} / {scoreBreakdown.promptPaymentsMax}</span>
                 </div>
-                <div style={styles.detailsSubtext}>{scoreBreakdown.details.promptPayments}</div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.promptPayments || 'N/A'}</div>
                 <div style={styles.detailsDivider} />
                 <div style={styles.detailsRow}>
                   <span style={styles.detailsTotalLabel}>Total Score:</span>
