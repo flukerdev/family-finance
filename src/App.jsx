@@ -49,8 +49,11 @@ export default function App() {
     live: '',
     mat: '',
     mara: '',
+    blue_total: '',
     blue_statement: '',
+    gold_total: '',
     gold_statement: '',
+    discover_total: '',
     discover_statement: '',
   });
   const [latestSnapshot, setLatestSnapshot] = useState(null);
@@ -58,6 +61,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [showScoreDetails, setShowScoreDetails] = useState(false);
+  const [expandedDetails, setExpandedDetails] = useState({});
 
   // Fetch latest snapshot on load
   useEffect(() => {
@@ -84,9 +89,12 @@ export default function App() {
         live: data[0].live.toString(),
         mat: data[0].mat.toString(),
         mara: data[0].mara.toString(),
-        blue_statement: data[0].blue_statement.toString(),
-        gold_statement: data[0].gold_statement.toString(),
-        discover_statement: data[0].discover_statement.toString(),
+        blue_total: (data[0].blue_total || 0).toString(),
+        blue_statement: (data[0].blue_statement || 0).toString(),
+        gold_total: (data[0].gold_total || 0).toString(),
+        gold_statement: (data[0].gold_statement || 0).toString(),
+        discover_total: (data[0].discover_total || 0).toString(),
+        discover_statement: (data[0].discover_statement || 0).toString(),
       });
     }
     setLoading(false);
@@ -102,8 +110,11 @@ export default function App() {
       live: parseFloat(balances.live) || 0,
       mat: parseFloat(balances.mat) || 0,
       mara: parseFloat(balances.mara) || 0,
+      blue_total: parseFloat(balances.blue_total) || 0,
       blue_statement: parseFloat(balances.blue_statement) || 0,
+      gold_total: parseFloat(balances.gold_total) || 0,
       gold_statement: parseFloat(balances.gold_statement) || 0,
+      discover_total: parseFloat(balances.discover_total) || 0,
       discover_statement: parseFloat(balances.discover_statement) || 0,
     };
 
@@ -161,6 +172,7 @@ export default function App() {
   // Get upcoming bills/due dates
   const getUpcomingBills = () => {
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const bills = [];
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
@@ -173,19 +185,19 @@ export default function App() {
       // Discover due 2nd
       const discoverDate = new Date(year, month, 2);
       if (discoverDate >= today) {
-        bills.push({ date: discoverDate, type: 'discover', name: 'Discover (Mara)', account: 'mara' });
+        bills.push({ date: discoverDate, type: 'discover', name: 'Discover (Mara)', account: 'mara', dueDay: 2 });
       }
 
       // Blue Amex due 8th
       const blueDate = new Date(year, month, 8);
       if (blueDate >= today) {
-        bills.push({ date: blueDate, type: 'blue', name: 'Blue Amex (LIVE)', account: 'live' });
+        bills.push({ date: blueDate, type: 'blue', name: 'Blue Amex (LIVE)', account: 'live', dueDay: 8 });
       }
 
       // Gold Amex due 15th
       const goldDate = new Date(year, month, 15);
       if (goldDate >= today) {
-        bills.push({ date: goldDate, type: 'gold', name: 'Gold Amex (Mat)', account: 'mat' });
+        bills.push({ date: goldDate, type: 'gold', name: 'Gold Amex (Mat)', account: 'mat', dueDay: 15 });
       }
 
       // Rent - last day of month
@@ -198,156 +210,298 @@ export default function App() {
     return bills.sort((a, b) => a.date - b.date).slice(0, 6);
   };
 
+  // Get sorted credit cards by next due date
+  const getSortedCreditCards = () => {
+    if (!latestSnapshot) return [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const bills = getUpcomingBills();
+
+    const cards = [
+      {
+        type: 'discover',
+        name: 'Discover',
+        account: 'Mara',
+        total: latestSnapshot.discover_total || 0,
+        statement: latestSnapshot.discover_statement || 0,
+        dueDay: 2,
+        nextDue: bills.find(b => b.type === 'discover')?.date
+      },
+      {
+        type: 'blue',
+        name: 'Blue Amex',
+        account: 'LIVE',
+        total: latestSnapshot.blue_total || 0,
+        statement: latestSnapshot.blue_statement || 0,
+        dueDay: 8,
+        nextDue: bills.find(b => b.type === 'blue')?.date
+      },
+      {
+        type: 'gold',
+        name: 'Gold Amex',
+        account: 'Mat',
+        total: latestSnapshot.gold_total || 0,
+        statement: latestSnapshot.gold_statement || 0,
+        dueDay: 15,
+        nextDue: bills.find(b => b.type === 'gold')?.date
+      },
+    ];
+
+    return cards.sort((a, b) => {
+      if (!a.nextDue) return 1;
+      if (!b.nextDue) return -1;
+      return a.nextDue - b.nextDue;
+    });
+  };
+
+  // Calculate when an account will have enough to cover a payment
+  const calculatePaymentDate = (accountType, startBalance, statementAmount, dueDate) => {
+    if (statementAmount === 0) {
+      return { canPay: true, dateAvailable: new Date(), details: 'Statement already paid' };
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let projectedBalance = startBalance;
+    const paydays = getUpcomingPaydays();
+
+    for (const payday of paydays) {
+      if (payday.date > dueDate) break;
+
+      if (accountType === 'live') {
+        if (payday.type === 'mat') projectedBalance += CONFIG.splits.matLive;
+        if (payday.type === 'mara') projectedBalance += CONFIG.splits.maraLive;
+      } else if (accountType === 'mat') {
+        if (payday.type === 'mat') projectedBalance += CONFIG.splits.matPersonalFromMat;
+        if (payday.type === 'mara') projectedBalance += CONFIG.splits.matPersonalFromMara;
+      } else if (accountType === 'mara') {
+        if (payday.type === 'mat') projectedBalance += CONFIG.splits.maraPersonalFromMat;
+        if (payday.type === 'mara') projectedBalance += CONFIG.splits.maraPersonalFromMara;
+      }
+
+      if (projectedBalance >= statementAmount) {
+        return {
+          canPay: true,
+          dateAvailable: payday.date,
+          projectedBalance,
+          details: `Balance will reach $${projectedBalance.toFixed(2)} after ${payday.type === 'mat' ? 'Mat' : 'Mara'}'s paycheck on ${payday.date.toLocaleDateString()}`
+        };
+      }
+    }
+
+    // Check if current balance is already enough
+    if (projectedBalance >= statementAmount) {
+      return {
+        canPay: true,
+        dateAvailable: today,
+        projectedBalance,
+        details: `Current balance of $${projectedBalance.toFixed(2)} already covers statement of $${statementAmount.toFixed(2)}`
+      };
+    }
+
+    return {
+      canPay: false,
+      dateAvailable: null,
+      projectedBalance,
+      shortfall: statementAmount - projectedBalance,
+      details: `Even after all paychecks before due date, balance will only reach $${projectedBalance.toFixed(2)}, short by $${(statementAmount - projectedBalance).toFixed(2)}`
+    };
+  };
+
   // Calculate health score and alerts
   const calculateHealth = () => {
-    if (!latestSnapshot) return { score: 0, alerts: [], positives: [] };
+    if (!latestSnapshot) return { score: 0, alerts: [], positives: [], scoreBreakdown: {} };
 
     const alerts = [];
     const positives = [];
-    let score = 100;
+    const scoreBreakdown = {
+      billsScore: 0,
+      billsMax: 40,
+      personalScore: 0,
+      personalMax: 20,
+      liveBufferScore: 0,
+      liveBufferMax: 15,
+      daysUntilFundsScore: 0,
+      daysUntilFundsMax: 25,
+      details: {}
+    };
 
     const today = new Date();
-    const paydays = getUpcomingPaydays();
+    today.setHours(0, 0, 0, 0);
     const bills = getUpcomingBills();
 
-    // Project account balances forward
-    let projectedLive = latestSnapshot.live;
-    let projectedMat = latestSnapshot.mat;
-    let projectedMara = latestSnapshot.mara;
-
-    // Simulate forward in time
-    const events = [...bills, ...paydays].sort((a, b) => a.date - b.date);
-
-    for (const event of events) {
-      if (event.type === 'mat') {
-        projectedLive += CONFIG.splits.matLive;
-        projectedMat += CONFIG.splits.matPersonalFromMat;
-        projectedMara += CONFIG.splits.maraPersonalFromMat;
-      } else if (event.type === 'mara') {
-        projectedLive += CONFIG.splits.maraLive;
-        projectedMat += CONFIG.splits.matPersonalFromMara;
-        projectedMara += CONFIG.splits.maraPersonalFromMara;
-      }
-    }
-
-    // Check: Can Mara pay Discover by the 2nd?
+    // Get next credit card bills
     const nextDiscover = bills.find(b => b.type === 'discover');
-    if (nextDiscover) {
-      let maraAtDiscover = latestSnapshot.mara;
-      for (const p of paydays) {
-        if (p.date < nextDiscover.date) {
-          if (p.type === 'mat') maraAtDiscover += CONFIG.splits.maraPersonalFromMat;
-          if (p.type === 'mara') maraAtDiscover += CONFIG.splits.maraPersonalFromMara;
-        }
-      }
-      if (maraAtDiscover < latestSnapshot.discover_statement) {
-        const shortfall = latestSnapshot.discover_statement - maraAtDiscover;
-        alerts.push({
-          severity: 'critical',
-          message: `Mara won't have enough by ${nextDiscover.date.toLocaleDateString()}. Short $${shortfall.toFixed(2)} for Discover payment.`
-        });
-        score -= 30;
-      } else {
-        positives.push(`Mara can cover Discover ($${latestSnapshot.discover_statement.toFixed(2)})`);
-      }
-    }
-
-    // Check: Can Mat pay Gold by the 15th?
-    const nextGold = bills.find(b => b.type === 'gold');
-    if (nextGold) {
-      let matAtGold = latestSnapshot.mat;
-      for (const p of paydays) {
-        if (p.date < nextGold.date) {
-          if (p.type === 'mat') matAtGold += CONFIG.splits.matPersonalFromMat;
-          if (p.type === 'mara') matAtGold += CONFIG.splits.matPersonalFromMara;
-        }
-      }
-      if (matAtGold < latestSnapshot.gold_statement) {
-        const shortfall = latestSnapshot.gold_statement - matAtGold;
-        alerts.push({
-          severity: 'critical',
-          message: `Mat won't have enough by ${nextGold.date.toLocaleDateString()}. Short $${shortfall.toFixed(2)} for Gold Amex payment.`
-        });
-        score -= 30;
-      } else {
-        positives.push(`Mat can cover Gold Amex ($${latestSnapshot.gold_statement.toFixed(2)})`);
-      }
-    }
-
-    // Check: Can LIVE pay Blue by the 8th?
     const nextBlue = bills.find(b => b.type === 'blue');
-    if (nextBlue) {
-      let liveAtBlue = latestSnapshot.live;
-      for (const p of paydays) {
-        if (p.date < nextBlue.date) {
-          if (p.type === 'mat') liveAtBlue += CONFIG.splits.matLive;
-          if (p.type === 'mara') liveAtBlue += CONFIG.splits.maraLive;
-        }
-      }
-      if (liveAtBlue < latestSnapshot.blue_statement) {
-        const shortfall = latestSnapshot.blue_statement - liveAtBlue;
+    const nextGold = bills.find(b => b.type === 'gold');
+
+    const billChecks = [];
+
+    // Check Discover (Mara)
+    if (nextDiscover) {
+      const discoverCheck = calculatePaymentDate('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date);
+      billChecks.push({
+        name: 'Discover',
+        account: 'Mara',
+        dueDate: nextDiscover.date,
+        statement: latestSnapshot.discover_statement,
+        ...discoverCheck
+      });
+
+      if (latestSnapshot.discover_statement === 0) {
+        positives.push({
+          message: `Mara's Discover statement is paid off (Total balance: $${latestSnapshot.discover_total.toFixed(2)})`,
+          details: 'Statement balance is $0.00'
+        });
+      } else if (discoverCheck.canPay) {
+        const daysEarly = Math.ceil((nextDiscover.date - discoverCheck.dateAvailable) / (1000 * 60 * 60 * 24));
+        positives.push({
+          message: `Mara is on pace to cover Discover ($${latestSnapshot.discover_statement.toFixed(2)})`,
+          details: discoverCheck.details,
+          daysEarly
+        });
+      } else {
         alerts.push({
           severity: 'critical',
-          message: `LIVE won't have enough by ${nextBlue.date.toLocaleDateString()}. Short $${shortfall.toFixed(2)} for Blue Amex payment.`
+          message: `Mara won't have enough for Discover by ${nextDiscover.date.toLocaleDateString()}. Short $${discoverCheck.shortfall.toFixed(2)}.`,
+          details: discoverCheck.details
         });
-        score -= 30;
-      } else {
-        positives.push(`LIVE can cover Blue Amex ($${latestSnapshot.blue_statement.toFixed(2)})`);
       }
     }
 
-    // Check: Can LIVE cover rent?
-    const nextRent = bills.find(b => b.type === 'rent');
-    if (nextRent) {
-      let liveAtRent = latestSnapshot.live;
-      // Subtract Blue Amex if it comes before rent
-      if (nextBlue && nextBlue.date < nextRent.date) {
-        liveAtRent -= latestSnapshot.blue_statement;
-      }
-      for (const p of paydays) {
-        if (p.date < nextRent.date) {
-          if (p.type === 'mat') liveAtRent += CONFIG.splits.matLive;
-          if (p.type === 'mara') liveAtRent += CONFIG.splits.maraLive;
-        }
-      }
-      if (liveAtRent < CONFIG.monthlyBills.rent) {
-        const shortfall = CONFIG.monthlyBills.rent - liveAtRent;
+    // Check Gold (Mat)
+    if (nextGold) {
+      const goldCheck = calculatePaymentDate('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date);
+      billChecks.push({
+        name: 'Gold Amex',
+        account: 'Mat',
+        dueDate: nextGold.date,
+        statement: latestSnapshot.gold_statement,
+        ...goldCheck
+      });
+
+      if (latestSnapshot.gold_statement === 0) {
+        positives.push({
+          message: `Mat's Gold Amex statement is paid off (Total balance: $${latestSnapshot.gold_total.toFixed(2)})`,
+          details: 'Statement balance is $0.00'
+        });
+      } else if (goldCheck.canPay) {
+        const daysEarly = Math.ceil((nextGold.date - goldCheck.dateAvailable) / (1000 * 60 * 60 * 24));
+        positives.push({
+          message: `Mat is on pace to cover Gold Amex ($${latestSnapshot.gold_statement.toFixed(2)})`,
+          details: goldCheck.details,
+          daysEarly
+        });
+      } else {
         alerts.push({
-          severity: 'warning',
-          message: `LIVE may be short $${shortfall.toFixed(2)} for rent on ${nextRent.date.toLocaleDateString()}.`
+          severity: 'critical',
+          message: `Mat won't have enough for Gold Amex by ${nextGold.date.toLocaleDateString()}. Short $${goldCheck.shortfall.toFixed(2)}.`,
+          details: goldCheck.details
         });
-        score -= 20;
-      } else {
-        positives.push(`LIVE can cover rent ($${CONFIG.monthlyBills.rent})`);
       }
     }
 
-    // Check personal account health
-    if (latestSnapshot.mat < 50) {
-      alerts.push({
-        severity: 'info',
-        message: `Mat's personal account is low ($${latestSnapshot.mat.toFixed(2)})`
+    // Check Blue (LIVE)
+    if (nextBlue) {
+      const blueCheck = calculatePaymentDate('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date);
+      billChecks.push({
+        name: 'Blue Amex',
+        account: 'LIVE',
+        dueDate: nextBlue.date,
+        statement: latestSnapshot.blue_statement,
+        ...blueCheck
       });
-      score -= 5;
-    }
-    if (latestSnapshot.mara < 50) {
-      alerts.push({
-        severity: 'info',
-        message: `Mara's personal account is low ($${latestSnapshot.mara.toFixed(2)})`
-      });
-      score -= 5;
+
+      if (latestSnapshot.blue_statement === 0) {
+        positives.push({
+          message: `LIVE's Blue Amex statement is paid off (Total balance: $${latestSnapshot.blue_total.toFixed(2)})`,
+          details: 'Statement balance is $0.00'
+        });
+      } else if (blueCheck.canPay) {
+        const daysEarly = Math.ceil((nextBlue.date - blueCheck.dateAvailable) / (1000 * 60 * 60 * 24));
+        positives.push({
+          message: `LIVE is on pace to cover Blue Amex ($${latestSnapshot.blue_statement.toFixed(2)})`,
+          details: blueCheck.details,
+          daysEarly
+        });
+      } else {
+        alerts.push({
+          severity: 'critical',
+          message: `LIVE won't have enough for Blue Amex by ${nextBlue.date.toLocaleDateString()}. Short $${blueCheck.shortfall.toFixed(2)}.`,
+          details: blueCheck.details
+        });
+      }
     }
 
-    // Bonus for healthy savings
-    if (latestSnapshot.save > 10000) {
-      positives.push(`Savings looking healthy at $${latestSnapshot.save.toLocaleString()}`);
-      score = Math.min(100, score + 5);
+    // SCORING: 40 points for bills
+    const billsCovered = billChecks.filter(b => b.canPay).length;
+    const totalBills = billChecks.length;
+    scoreBreakdown.billsScore = totalBills > 0 ? (billsCovered / totalBills) * 40 : 40;
+    scoreBreakdown.details.bills = `${billsCovered} of ${totalBills} upcoming bills can be paid on time`;
+
+    // SCORING: 20 points for personal account health
+    let personalPoints = 0;
+    if (latestSnapshot.mat >= 50) personalPoints += 10;
+    else if (latestSnapshot.mat >= 20) personalPoints += 5;
+    else alerts.push({ severity: 'info', message: `Mat's personal account is low ($${latestSnapshot.mat.toFixed(2)})`, details: 'Below $50 threshold' });
+
+    if (latestSnapshot.mara >= 50) personalPoints += 10;
+    else if (latestSnapshot.mara >= 20) personalPoints += 5;
+    else alerts.push({ severity: 'info', message: `Mara's personal account is low ($${latestSnapshot.mara.toFixed(2)})`, details: 'Below $50 threshold' });
+
+    scoreBreakdown.personalScore = personalPoints;
+    scoreBreakdown.details.personal = `Mat: $${latestSnapshot.mat.toFixed(2)}, Mara: $${latestSnapshot.mara.toFixed(2)}`;
+
+    // SCORING: 15 points for LIVE buffer
+    const liveBuffer = latestSnapshot.live;
+    if (liveBuffer >= 150) scoreBreakdown.liveBufferScore = 15;
+    else if (liveBuffer >= 100) scoreBreakdown.liveBufferScore = 10;
+    else if (liveBuffer >= 50) scoreBreakdown.liveBufferScore = 5;
+    else {
+      scoreBreakdown.liveBufferScore = 0;
+      alerts.push({ severity: 'warning', message: `LIVE buffer is critically low ($${liveBuffer.toFixed(2)})`, details: 'Recommended minimum: $150' });
+    }
+    scoreBreakdown.details.liveBuffer = `Current LIVE balance: $${liveBuffer.toFixed(2)} (Target: $150+)`;
+
+    // SCORING: 25 points for days until funds available
+    let daysScore = 0;
+    let totalDaysEarly = 0;
+    let billsWithFunds = 0;
+
+    for (const check of billChecks) {
+      if (check.canPay && check.statement > 0) {
+        const daysEarly = Math.ceil((check.dueDate - check.dateAvailable) / (1000 * 60 * 60 * 24));
+        totalDaysEarly += Math.max(0, daysEarly);
+        billsWithFunds++;
+      }
     }
 
-    return { score: Math.max(0, score), alerts, positives };
+    if (billsWithFunds > 0) {
+      const avgDaysEarly = totalDaysEarly / billsWithFunds;
+      if (avgDaysEarly >= 7) daysScore = 25;
+      else if (avgDaysEarly >= 5) daysScore = 20;
+      else if (avgDaysEarly >= 3) daysScore = 15;
+      else if (avgDaysEarly >= 1) daysScore = 10;
+      else daysScore = 5;
+    }
+
+    scoreBreakdown.daysUntilFundsScore = daysScore;
+    scoreBreakdown.details.daysUntilFunds = billsWithFunds > 0
+      ? `Average ${(totalDaysEarly / billsWithFunds).toFixed(1)} days early across ${billsWithFunds} bill(s)`
+      : 'No upcoming bills with payments needed';
+
+    const totalScore = Math.round(
+      scoreBreakdown.billsScore +
+      scoreBreakdown.personalScore +
+      scoreBreakdown.liveBufferScore +
+      scoreBreakdown.daysUntilFundsScore
+    );
+
+    return { score: totalScore, alerts, positives, scoreBreakdown };
   };
 
-  const { score, alerts, positives } = calculateHealth();
+  const { score, alerts, positives, scoreBreakdown } = calculateHealth();
 
   const getScoreColor = (s) => {
     if (s >= 80) return '#10b981';
@@ -404,6 +558,74 @@ export default function App() {
     };
   };
 
+  // Calculate projected kickback for end of month
+  const calculateProjectedKickback = () => {
+    if (!latestSnapshot) return null;
+
+    const today = new Date();
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
+
+    const paydays = getUpcomingPaydays();
+    const bills = getUpcomingBills();
+
+    // Start with current LIVE balance
+    let projectedLive = latestSnapshot.live;
+
+    // Add all paychecks before end of month
+    for (const payday of paydays) {
+      if (payday.date <= endOfMonth) {
+        if (payday.type === 'mat') projectedLive += CONFIG.splits.matLive;
+        if (payday.type === 'mara') projectedLive += CONFIG.splits.maraLive;
+      }
+    }
+
+    // Subtract rent if due this month
+    const rentBill = bills.find(b => b.type === 'rent' && b.date <= endOfMonth);
+    if (rentBill) {
+      projectedLive -= CONFIG.monthlyBills.rent;
+    }
+
+    // Subtract Blue Amex statement if due this month
+    const blueBill = bills.find(b => b.type === 'blue' && b.date <= endOfMonth);
+    if (blueBill) {
+      projectedLive -= latestSnapshot.blue_statement;
+    }
+
+    // Subtract projected remaining monthly expenses
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const dayOfMonth = today.getDate();
+    const daysRemaining = daysInMonth - dayOfMonth;
+    const monthProgress = dayOfMonth / daysInMonth;
+
+    // Calculate how much of monthly budget should be spent so far
+    const monthlyVariableExpenses = CONFIG.monthlyBills.groceries + CONFIG.monthlyBills.gas + CONFIG.monthlyBills.dateNights + CONFIG.monthlyBills.power + CONFIG.monthlyBills.gym + CONFIG.monthlyBills.insurance;
+    const projectedRemainingExpenses = monthlyVariableExpenses * (1 - monthProgress);
+
+    projectedLive -= projectedRemainingExpenses;
+
+    // Kickback is anything above the $150 safety buffer
+    const potentialKickback = Math.max(0, projectedLive - 150);
+    const kickbackEach = potentialKickback / 2;
+
+    return {
+      projectedLive,
+      potentialKickback,
+      kickbackEach,
+      details: {
+        startingBalance: latestSnapshot.live,
+        projectedInflows: paydays.filter(p => p.date <= endOfMonth).reduce((sum, p) =>
+          sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive), 0),
+        rent: rentBill ? CONFIG.monthlyBills.rent : 0,
+        blueAmex: blueBill ? latestSnapshot.blue_statement : 0,
+        projectedRemainingExpenses,
+        safetyBuffer: 150,
+        daysRemaining,
+        monthProgress: (monthProgress * 100).toFixed(1),
+      }
+    };
+  };
+
   // Generate monthly report
   const generateMonthlyReport = () => {
     if (snapshots.length < 2) return null;
@@ -414,10 +636,7 @@ export default function App() {
     const monthStart = snapshots.find(s => new Date(s.created_at) <= oneMonthAgo) || snapshots[snapshots.length - 1];
     const monthEnd = snapshots[0];
 
-    // Calculate potential kickback (if LIVE ended month with surplus)
-    const liveChange = monthEnd.live - monthStart.live;
-    const expectedLiveChange = 0; // Should net to ~0 if perfectly balanced
-    const potentialKickback = Math.max(0, monthEnd.live - 150); // 150 is the safety buffer
+    const kickbackProjection = calculateProjectedKickback();
 
     return {
       period: 'This Month',
@@ -428,7 +647,7 @@ export default function App() {
         mat: monthEnd.mat - monthStart.mat,
         mara: monthEnd.mara - monthStart.mara,
       },
-      potentialKickback: potentialKickback > 50 ? potentialKickback : 0,
+      kickbackProjection,
       startDate: new Date(monthStart.created_at),
       endDate: new Date(monthEnd.created_at),
     };
@@ -499,6 +718,42 @@ export default function App() {
                 <span style={styles.scoreLabel}>{getScoreLabel(score)}</span>
               </div>
             </div>
+            <button
+              onClick={() => setExpandedDetails(prev => ({ ...prev, score: !prev.score }))}
+              style={styles.detailsButton}
+            >
+              {expandedDetails.score ? 'Hide' : 'Show'} Details
+            </button>
+            {expandedDetails.score && scoreBreakdown && (
+              <div style={styles.detailsBox}>
+                <h3 style={styles.detailsTitle}>Score Breakdown</h3>
+                <div style={styles.detailsRow}>
+                  <span>Bills on Time:</span>
+                  <span>{scoreBreakdown.billsScore.toFixed(1)} / {scoreBreakdown.billsMax}</span>
+                </div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.bills}</div>
+                <div style={styles.detailsRow}>
+                  <span>Personal Accounts:</span>
+                  <span>{scoreBreakdown.personalScore.toFixed(1)} / {scoreBreakdown.personalMax}</span>
+                </div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.personal}</div>
+                <div style={styles.detailsRow}>
+                  <span>LIVE Buffer:</span>
+                  <span>{scoreBreakdown.liveBufferScore.toFixed(1)} / {scoreBreakdown.liveBufferMax}</span>
+                </div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.liveBuffer}</div>
+                <div style={styles.detailsRow}>
+                  <span>Days Until Funds:</span>
+                  <span>{scoreBreakdown.daysUntilFundsScore.toFixed(1)} / {scoreBreakdown.daysUntilFundsMax}</span>
+                </div>
+                <div style={styles.detailsSubtext}>{scoreBreakdown.details.daysUntilFunds}</div>
+                <div style={styles.detailsDivider} />
+                <div style={styles.detailsRow}>
+                  <span style={styles.detailsTotalLabel}>Total Score:</span>
+                  <span style={styles.detailsTotalValue}>{score} / 100</span>
+                </div>
+              </div>
+            )}
             {latestSnapshot && (
               <p style={styles.lastUpdated}>
                 Last updated: {new Date(latestSnapshot.created_at).toLocaleString()}
@@ -519,7 +774,20 @@ export default function App() {
                                      alert.severity === 'warning' ? '#f59e0b' : '#3b82f6'
                   }}
                 >
-                  {alert.message}
+                  <div style={styles.alertContent}>
+                    <span style={styles.alertMessage}>{alert.message}</span>
+                    {alert.details && (
+                      <button
+                        onClick={() => setExpandedDetails(prev => ({ ...prev, [`alert-${i}`]: !prev[`alert-${i}`] }))}
+                        style={styles.detailsButtonSmall}
+                      >
+                        {expandedDetails[`alert-${i}`] ? 'Hide' : 'Details'}
+                      </button>
+                    )}
+                  </div>
+                  {expandedDetails[`alert-${i}`] && alert.details && (
+                    <div style={styles.alertDetails}>{alert.details}</div>
+                  )}
                 </div>
               ))}
             </section>
@@ -529,11 +797,28 @@ export default function App() {
           {positives.length > 0 && (
             <section style={styles.positivesSection}>
               <h2 style={styles.sectionTitle}>✓ Looking Good</h2>
-              {positives.map((msg, i) => (
-                <div key={i} style={styles.positive}>
-                  {msg}
-                </div>
-              ))}
+              {positives.map((item, i) => {
+                const msg = typeof item === 'string' ? item : item.message;
+                const details = typeof item === 'object' ? item.details : null;
+                return (
+                  <div key={i} style={styles.positive}>
+                    <div style={styles.positiveContent}>
+                      <span style={styles.positiveMessage}>{msg}</span>
+                      {details && (
+                        <button
+                          onClick={() => setExpandedDetails(prev => ({ ...prev, [`positive-${i}`]: !prev[`positive-${i}`] }))}
+                          style={styles.detailsButtonSmall}
+                        >
+                          {expandedDetails[`positive-${i}`] ? 'Hide' : 'Details'}
+                        </button>
+                      )}
+                    </div>
+                    {expandedDetails[`positive-${i}`] && details && (
+                      <div style={styles.positiveDetails}>{details}</div>
+                    )}
+                  </div>
+                );
+              })}
             </section>
           )}
 
@@ -561,23 +846,43 @@ export default function App() {
           {/* Credit Cards */}
           {latestSnapshot && (
             <section style={styles.cardsSection}>
-              <h2 style={styles.sectionTitle}>Statement Balances</h2>
+              <h2 style={styles.sectionTitle}>Credit Cards (Sorted by Next Due)</h2>
               <div style={styles.cardsGrid}>
-                <div style={styles.cardItem}>
-                  <span style={styles.cardName}>Blue Amex</span>
-                  <span style={styles.cardBalance}>${latestSnapshot.blue_statement.toFixed(2)}</span>
-                  <span style={styles.cardDue}>Due: 8th → LIVE</span>
-                </div>
-                <div style={styles.cardItem}>
-                  <span style={styles.cardName}>Gold Amex</span>
-                  <span style={styles.cardBalance}>${latestSnapshot.gold_statement.toFixed(2)}</span>
-                  <span style={styles.cardDue}>Due: 15th → Mat</span>
-                </div>
-                <div style={styles.cardItem}>
-                  <span style={styles.cardName}>Discover</span>
-                  <span style={styles.cardBalance}>${latestSnapshot.discover_statement.toFixed(2)}</span>
-                  <span style={styles.cardDue}>Due: 2nd → Mara</span>
-                </div>
+                {getSortedCreditCards().map(card => (
+                  <div key={card.type} style={styles.cardItem}>
+                    <div style={styles.cardItemHeader}>
+                      <span style={styles.cardName}>{card.name}</span>
+                      <span style={styles.cardDue}>
+                        Due: {card.dueDay}{card.dueDay === 2 ? 'nd' : card.dueDay === 8 ? 'th' : 'th'} → {card.account}
+                      </span>
+                    </div>
+                    <div style={styles.cardItemBalances}>
+                      <div style={styles.cardBalanceItem}>
+                        <span style={styles.cardBalanceLabel}>Total Balance</span>
+                        <span style={styles.cardBalanceValue}>${card.total.toFixed(2)}</span>
+                      </div>
+                      <div style={styles.cardBalanceItem}>
+                        <span style={styles.cardBalanceLabel}>Statement Due</span>
+                        <span style={{
+                          ...styles.cardBalanceValue,
+                          color: card.statement === 0 ? '#10b981' : '#f59e0b'
+                        }}>
+                          ${card.statement.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    {card.statement === 0 && card.total > 0 && (
+                      <div style={styles.cardPaidBadge}>
+                        ✓ Statement Paid
+                      </div>
+                    )}
+                    {card.statement === 0 && card.total === 0 && (
+                      <div style={styles.cardPaidBadge}>
+                        ✓ Fully Paid Off
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </section>
           )}
@@ -652,24 +957,47 @@ export default function App() {
             </div>
 
             <div style={styles.inputGroup}>
-              <h3 style={styles.inputGroupTitle}>Credit Card Statements</h3>
+              <h3 style={styles.inputGroupTitle}>Credit Cards</h3>
+              <p style={styles.inputHint}>Total Balance = All charges | Statement Balance = Amount due this cycle</p>
               {[
-                { key: 'blue_statement', label: 'Blue Amex (LIVE)' },
-                { key: 'gold_statement', label: 'Gold Amex (Mat)' },
-                { key: 'discover_statement', label: 'Discover (Mara)' },
+                { totalKey: 'blue_total', statementKey: 'blue_statement', label: 'Blue Amex (LIVE)', due: '8th' },
+                { totalKey: 'gold_total', statementKey: 'gold_statement', label: 'Gold Amex (Mat)', due: '15th' },
+                { totalKey: 'discover_total', statementKey: 'discover_statement', label: 'Discover (Mara)', due: '2nd' },
               ].map(card => (
-                <div key={card.key} style={styles.inputRow}>
-                  <label style={styles.inputLabel}>{card.label}</label>
-                  <div style={styles.inputWrapper}>
-                    <span style={styles.inputPrefix}>$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={balances[card.key]}
-                      onChange={(e) => handleInputChange(card.key, e.target.value)}
-                      style={styles.input}
-                      placeholder="0.00"
-                    />
+                <div key={card.label} style={styles.cardInputGroup}>
+                  <div style={styles.cardInputHeader}>
+                    <span style={styles.cardInputLabel}>{card.label}</span>
+                    <span style={styles.cardInputDue}>Due: {card.due}</span>
+                  </div>
+                  <div style={styles.cardInputRow}>
+                    <div style={styles.inputRowHalf}>
+                      <label style={styles.inputLabelSmall}>Total Balance</label>
+                      <div style={styles.inputWrapper}>
+                        <span style={styles.inputPrefix}>$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={balances[card.totalKey]}
+                          onChange={(e) => handleInputChange(card.totalKey, e.target.value)}
+                          style={styles.input}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                    <div style={styles.inputRowHalf}>
+                      <label style={styles.inputLabelSmall}>Statement Balance</label>
+                      <div style={styles.inputWrapper}>
+                        <span style={styles.inputPrefix}>$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={balances[card.statementKey]}
+                          onChange={(e) => handleInputChange(card.statementKey, e.target.value)}
+                          style={styles.input}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -750,9 +1078,71 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {report.potentialKickback > 0 && (
-                    <div style={styles.kickbackAlert}>
-                      🎉 Potential Kickback: ${report.potentialKickback.toFixed(2)} (${(report.potentialKickback / 2).toFixed(2)} each!)
+                  {report.kickbackProjection && report.kickbackProjection.potentialKickback > 0 && (
+                    <div style={styles.kickbackSection}>
+                      <div style={styles.kickbackAlert}>
+                        🎉 Projected End-of-Month Kickback: ${report.kickbackProjection.potentialKickback.toFixed(2)} (${report.kickbackProjection.kickbackEach.toFixed(2)} each!)
+                      </div>
+                      <button
+                        onClick={() => setExpandedDetails(prev => ({ ...prev, kickback: !prev.kickback }))}
+                        style={styles.detailsButtonSmall}
+                      >
+                        {expandedDetails.kickback ? 'Hide' : 'Show'} Calculation Details
+                      </button>
+                      {expandedDetails.kickback && (
+                        <div style={styles.kickbackDetails}>
+                          <h4 style={styles.kickbackDetailsTitle}>How this was calculated:</h4>
+                          <div style={styles.kickbackDetailRow}>
+                            <span>Current LIVE balance:</span>
+                            <span>${report.kickbackProjection.details.startingBalance.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.kickbackDetailRow}>
+                            <span>+ Projected paychecks (LIVE portion):</span>
+                            <span>+${report.kickbackProjection.details.projectedInflows.toFixed(2)}</span>
+                          </div>
+                          {report.kickbackProjection.details.rent > 0 && (
+                            <div style={styles.kickbackDetailRow}>
+                              <span>- Rent payment:</span>
+                              <span>-${report.kickbackProjection.details.rent.toFixed(2)}</span>
+                            </div>
+                          )}
+                          {report.kickbackProjection.details.blueAmex > 0 && (
+                            <div style={styles.kickbackDetailRow}>
+                              <span>- Blue Amex payment:</span>
+                              <span>-${report.kickbackProjection.details.blueAmex.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div style={styles.kickbackDetailRow}>
+                            <span>- Projected remaining expenses ({report.kickbackProjection.details.daysRemaining} days):</span>
+                            <span>-${report.kickbackProjection.details.projectedRemainingExpenses.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.kickbackDetailRow}>
+                            <span>- Safety buffer:</span>
+                            <span>-${report.kickbackProjection.details.safetyBuffer.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.kickbackDivider} />
+                          <div style={styles.kickbackDetailRow}>
+                            <span style={styles.kickbackTotalLabel}>Projected LIVE at month end:</span>
+                            <span style={styles.kickbackTotalValue}>${report.kickbackProjection.projectedLive.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.kickbackDetailRow}>
+                            <span style={styles.kickbackTotalLabel}>Available for kickback:</span>
+                            <span style={styles.kickbackTotalValue}>${report.kickbackProjection.potentialKickback.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.kickbackDetailRow}>
+                            <span style={styles.kickbackEachLabel}>Each person gets:</span>
+                            <span style={styles.kickbackEachValue}>${report.kickbackProjection.kickbackEach.toFixed(2)}</span>
+                          </div>
+                          <p style={styles.kickbackNote}>
+                            Month is {report.kickbackProjection.details.monthProgress}% complete
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {report.kickbackProjection && report.kickbackProjection.potentialKickback <= 0 && (
+                    <div style={styles.noKickbackAlert}>
+                      No kickback projected this month. Projected LIVE at month end: ${report.kickbackProjection.projectedLive.toFixed(2)}
                     </div>
                   )}
                 </div>
@@ -909,6 +1299,23 @@ const styles = {
     marginBottom: '0.5rem',
     fontSize: '0.875rem',
   },
+  alertContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '0.5rem',
+  },
+  alertMessage: {
+    flex: 1,
+  },
+  alertDetails: {
+    marginTop: '0.5rem',
+    paddingTop: '0.5rem',
+    borderTop: '1px solid #334155',
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+    fontStyle: 'italic',
+  },
   positivesSection: {
     marginBottom: '1.5rem',
   },
@@ -920,6 +1327,23 @@ const styles = {
     marginBottom: '0.5rem',
     fontSize: '0.875rem',
     color: '#a7f3d0',
+  },
+  positiveContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '0.5rem',
+  },
+  positiveMessage: {
+    flex: 1,
+  },
+  positiveDetails: {
+    marginTop: '0.5rem',
+    paddingTop: '0.5rem',
+    borderTop: '1px solid #065f46',
+    fontSize: '0.75rem',
+    color: '#6ee7b7',
+    fontStyle: 'italic',
   },
   balancesSection: {
     marginBottom: '1.5rem',
@@ -956,16 +1380,21 @@ const styles = {
     gap: '0.5rem',
   },
   cardItem: {
-    padding: '0.75rem 1rem',
+    padding: '1rem',
     backgroundColor: '#1e293b',
     borderRadius: '0.5rem',
     display: 'flex',
+    flexDirection: 'column',
+    gap: '0.75rem',
+  },
+  cardItemHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: '1rem',
   },
   cardName: {
-    fontWeight: '500',
-    flex: 1,
+    fontWeight: '600',
+    fontSize: '0.875rem',
   },
   cardBalance: {
     fontWeight: '600',
@@ -974,6 +1403,37 @@ const styles = {
   cardDue: {
     fontSize: '0.75rem',
     color: '#64748b',
+  },
+  cardItemBalances: {
+    display: 'flex',
+    gap: '0.75rem',
+  },
+  cardBalanceItem: {
+    flex: 1,
+    padding: '0.5rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+  },
+  cardBalanceLabel: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  cardBalanceValue: {
+    fontSize: '1rem',
+    fontWeight: '600',
+  },
+  cardPaidBadge: {
+    fontSize: '0.75rem',
+    color: '#10b981',
+    backgroundColor: '#022c22',
+    padding: '0.25rem 0.5rem',
+    borderRadius: '0.25rem',
+    textAlign: 'center',
   },
   timelineSection: {
     marginBottom: '1.5rem',
@@ -1040,6 +1500,47 @@ const styles = {
     fontWeight: '600',
     color: '#f1f5f9',
     marginBottom: '1rem',
+  },
+  inputHint: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+    marginBottom: '1rem',
+    marginTop: '-0.5rem',
+  },
+  cardInputGroup: {
+    marginBottom: '1.5rem',
+    padding: '1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+  },
+  cardInputHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.75rem',
+  },
+  cardInputLabel: {
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  cardInputDue: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+  },
+  cardInputRow: {
+    display: 'flex',
+    gap: '1rem',
+  },
+  inputRowHalf: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  inputLabelSmall: {
+    fontSize: '0.75rem',
+    color: '#94a3b8',
   },
   inputRow: {
     display: 'flex',
@@ -1124,14 +1625,141 @@ const styles = {
     fontSize: '0.875rem',
     fontWeight: '600',
   },
-  kickbackAlert: {
+  detailsButton: {
     marginTop: '1rem',
+    padding: '0.5rem 1rem',
+    backgroundColor: '#1e293b',
+    border: '1px solid #334155',
+    borderRadius: '0.5rem',
+    color: '#94a3b8',
+    fontSize: '0.75rem',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  detailsButtonSmall: {
+    padding: '0.25rem 0.5rem',
+    backgroundColor: '#0f172a',
+    border: '1px solid #334155',
+    borderRadius: '0.25rem',
+    color: '#64748b',
+    fontSize: '0.625rem',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    whiteSpace: 'nowrap',
+  },
+  detailsBox: {
+    marginTop: '1rem',
+    padding: '1rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.5rem',
+    border: '1px solid #334155',
+  },
+  detailsTitle: {
+    fontSize: '0.75rem',
+    fontWeight: '600',
+    color: '#94a3b8',
+    marginBottom: '0.75rem',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  detailsRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '0.75rem',
+    color: '#cbd5e1',
+    marginBottom: '0.5rem',
+  },
+  detailsSubtext: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    marginBottom: '0.75rem',
+    fontStyle: 'italic',
+  },
+  detailsDivider: {
+    height: '1px',
+    backgroundColor: '#334155',
+    margin: '0.75rem 0',
+  },
+  detailsTotalLabel: {
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  detailsTotalValue: {
+    fontWeight: '700',
+    color: '#3b82f6',
+    fontSize: '0.875rem',
+  },
+  kickbackSection: {
+    marginTop: '1rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  kickbackAlert: {
     padding: '0.75rem 1rem',
     backgroundColor: '#022c22',
     borderRadius: '0.5rem',
     color: '#a7f3d0',
     fontSize: '0.875rem',
     textAlign: 'center',
+  },
+  noKickbackAlert: {
+    marginTop: '1rem',
+    padding: '0.75rem 1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    color: '#94a3b8',
+    fontSize: '0.875rem',
+    textAlign: 'center',
+  },
+  kickbackDetails: {
+    padding: '1rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.5rem',
+    border: '1px solid #065f46',
+  },
+  kickbackDetailsTitle: {
+    fontSize: '0.75rem',
+    fontWeight: '600',
+    color: '#6ee7b7',
+    marginBottom: '0.75rem',
+  },
+  kickbackDetailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '0.75rem',
+    color: '#a7f3d0',
+    marginBottom: '0.5rem',
+  },
+  kickbackDivider: {
+    height: '1px',
+    backgroundColor: '#065f46',
+    margin: '0.75rem 0',
+  },
+  kickbackTotalLabel: {
+    fontWeight: '600',
+    color: '#d1fae5',
+  },
+  kickbackTotalValue: {
+    fontWeight: '700',
+    color: '#10b981',
+  },
+  kickbackEachLabel: {
+    fontWeight: '700',
+    color: '#d1fae5',
+    fontSize: '0.875rem',
+  },
+  kickbackEachValue: {
+    fontWeight: '700',
+    color: '#10b981',
+    fontSize: '0.875rem',
+  },
+  kickbackNote: {
+    fontSize: '0.625rem',
+    color: '#6ee7b7',
+    marginTop: '0.5rem',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   noData: {
     color: '#64748b',
