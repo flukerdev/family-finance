@@ -1182,13 +1182,32 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  {expandedDetails[`alert-${i}`] && (
-                    <div style={styles.alertDetails}>
-                      {alert.calculation ? (
-                        <pre style={styles.calculationPre}>{alert.calculation}</pre>
-                      ) : (
-                        alert.details
-                      )}
+                  {expandedDetails[`alert-${i}`] && alert.calculation && (
+                    <div style={styles.calculationBox}>
+                      {alert.calculation.split('\n').map((line, idx) => {
+                        if (!line.trim()) return null;
+                        const isIndented = line.startsWith('  ');
+                        const isSuccess = line.includes('✓');
+                        const isError = line.includes('✗');
+                        const isWarning = line.includes('⚠');
+                        let label = line.trim();
+                        let value = '';
+                        const priceMatch = line.match(/^(.+?)(\+?\$[\d,]+\.\d{2}|-\$[\d,]+\.\d{2})$/);
+                        if (priceMatch) {
+                          label = priceMatch[1].trim();
+                          value = priceMatch[2];
+                        } else if (line.includes(':') && !isSuccess && !isError && !isWarning) {
+                          const colonIdx = line.lastIndexOf(':');
+                          label = line.substring(0, colonIdx + 1).trim();
+                          value = line.substring(colonIdx + 1).trim();
+                        }
+                        return (
+                          <div key={idx} style={{ ...styles.calculationRow, paddingLeft: isIndented ? '1.5rem' : '0', color: isSuccess ? '#6ee7b7' : isError ? '#fca5a5' : isWarning ? '#fcd34d' : isIndented ? '#94a3b8' : '#e2e8f0', fontStyle: isIndented ? 'italic' : 'normal' }}>
+                            <span>{label}</span>
+                            <span style={{ fontWeight: value && !isIndented ? '600' : '400' }}>{value}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1217,13 +1236,32 @@ export default function App() {
                         </button>
                       )}
                     </div>
-                    {expandedDetails[`positive-${i}`] && (
-                      <div style={styles.positiveDetails}>
-                        {calculation ? (
-                          <pre style={styles.calculationPre}>{calculation}</pre>
-                        ) : (
-                          details
-                        )}
+                    {expandedDetails[`positive-${i}`] && calculation && (
+                      <div style={styles.calculationBox}>
+                        {calculation.split('\n').map((line, idx) => {
+                          if (!line.trim()) return null;
+                          const isIndented = line.startsWith('  ');
+                          const isSuccess = line.includes('✓');
+                          const isError = line.includes('✗');
+                          const isWarning = line.includes('⚠');
+                          let label = line.trim();
+                          let value = '';
+                          const priceMatch = line.match(/^(.+?)(\+?\$[\d,]+\.\d{2}|-\$[\d,]+\.\d{2})$/);
+                          if (priceMatch) {
+                            label = priceMatch[1].trim();
+                            value = priceMatch[2];
+                          } else if (line.includes(':') && !isSuccess && !isError && !isWarning) {
+                            const colonIdx = line.lastIndexOf(':');
+                            label = line.substring(0, colonIdx + 1).trim();
+                            value = line.substring(colonIdx + 1).trim();
+                          }
+                          return (
+                            <div key={idx} style={{ ...styles.calculationRow, paddingLeft: isIndented ? '1.5rem' : '0', color: isSuccess ? '#6ee7b7' : isError ? '#fca5a5' : isWarning ? '#fcd34d' : isIndented ? '#94a3b8' : '#e2e8f0', fontStyle: isIndented ? 'italic' : 'normal' }}>
+                              <span>{label}</span>
+                              <span style={{ fontWeight: value && !isIndented ? '600' : '400' }}>{value}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2160,11 +2198,28 @@ const styles = {
     fontStyle: 'italic',
   },
   calculationPre: {
-    fontFamily: 'monospace',
-    fontSize: '0.75rem',
-    lineHeight: '1.5',
+    fontFamily: "'Courier New', Courier, monospace",
+    fontSize: '0.8125rem',
+    lineHeight: '1.6',
     whiteSpace: 'pre-wrap',
     margin: 0,
+    padding: '0.75rem',
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    borderRadius: '0.375rem',
+    fontStyle: 'italic',
+  },
+  calculationBox: {
+    marginTop: '0.75rem',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    fontSize: '0.8125rem',
+  },
+  calculationRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    marginBottom: '0.375rem',
+    lineHeight: '1.5',
   },
   positivesSection: {
     marginBottom: '1.5rem',
