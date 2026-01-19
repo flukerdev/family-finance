@@ -1071,17 +1071,25 @@ export default function App() {
                   cy="50"
                   r="45"
                   fill="none"
-                  stroke={getScoreColor(score)}
+                  stroke={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreColor(score)}
                   strokeWidth="8"
-                  strokeDasharray={`${score * 2.83} 283`}
+                  strokeDasharray={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? `${(score + scoreSuggestions[hoveredSuggestion].potentialGain) * 2.83} 283` : `${score * 2.83} 283`}
                   strokeLinecap="round"
                   transform="rotate(-90 50 50)"
-                  style={{ transition: 'stroke-dasharray 0.5s ease' }}
+                  style={{ transition: 'stroke-dasharray 0.5s ease, stroke 0.5s ease' }}
                 />
               </svg>
               <div style={styles.scoreText}>
-                <span style={{ ...styles.scoreNumber, color: getScoreColor(score) }}>{score}</span>
-                <span style={styles.scoreLabel}>{getScoreLabel(score)}</span>
+                <span style={{
+                  ...styles.scoreNumber,
+                  color: hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreColor(score),
+                  transition: 'color 0.5s ease'
+                }}>
+                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? score + scoreSuggestions[hoveredSuggestion].potentialGain : score}
+                </span>
+                <span style={{ ...styles.scoreLabel, transition: 'all 0.5s ease' }}>
+                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreLabel(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreLabel(score)}
+                </span>
               </div>
             </div>
             <button
@@ -1140,7 +1148,6 @@ export default function App() {
               {!collapsedSections.suggestions && (
                 <div style={styles.suggestionsGrid}>
                   {scoreSuggestions.map((suggestion, i) => {
-                    const projectedScore = score + suggestion.potentialGain;
                     const isHovered = hoveredSuggestion === i;
                     return (
                     <div
@@ -1158,24 +1165,7 @@ export default function App() {
                         <span style={styles.suggestionCategory}>{suggestion.category}</span>
                         <span style={styles.suggestionGain}>+{suggestion.potentialGain} pts</span>
                       </div>
-                      {isHovered && (
-                        <div style={styles.scorePreview}>
-                          <div style={styles.scorePreviewRow}>
-                            <span>Current Score:</span>
-                            <span style={{ ...styles.scorePreviewCurrent, color: getScoreColor(score) }}>
-                              {score} ({getScoreLabel(score)})
-                            </span>
-                          </div>
-                          <div style={styles.scorePreviewArrow}>→</div>
-                          <div style={styles.scorePreviewRow}>
-                            <span>New Score:</span>
-                            <span style={{ ...styles.scorePreviewNew, color: getScoreColor(projectedScore) }}>
-                              {projectedScore} ({getScoreLabel(projectedScore)})
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                    <p style={styles.suggestionText}>{suggestion.suggestion}</p>
+                      <p style={styles.suggestionText}>{suggestion.suggestion}</p>
                     <div style={styles.suggestionProgress}>
                       <span style={styles.suggestionCurrent}>{suggestion.currentPoints} / {suggestion.maxPoints}</span>
                     </div>
@@ -1500,93 +1490,129 @@ export default function App() {
           )}
 
         {/* Credit Cards */}
-        {latestSnapshot && (
-          <section style={styles.balancesSection}>
-            <h2 style={styles.sectionTitle}>Credit Cards</h2>
-            <div style={styles.accountsGrid}>
-              {/* Blue Amex */}
-              <div style={styles.creditCardDisplay}>
-                <div style={styles.creditCardHeader}>
-                  <span style={{ ...styles.balanceLabel, color: '#3b82f6' }}>Blue Amex</span>
-                  <span style={styles.creditCardDue}>Due: 11th</span>
-                </div>
-                <div style={styles.creditCardBalances}>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
-                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.blue_total.toFixed(2)}</span>
-                  </div>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Statement</span>
-                    <span style={{
-                      ...styles.creditCardBalanceValue,
-                      color: latestSnapshot.blue_statement === 0 ? '#10b981' : '#f59e0b'
-                    }}>
-                      ${latestSnapshot.blue_statement.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                {latestSnapshot.blue_statement === 0 && (
-                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
-                )}
-                <div style={styles.creditCardPaidBy}>Paid by LIVE</div>
-              </div>
+        {latestSnapshot && (() => {
+          const bills = getUpcomingBills();
+          const cards = [
+            {
+              type: 'discover',
+              name: 'Discover',
+              account: 'Mara',
+              color: '#ec4899',
+              statement: latestSnapshot.discover_statement,
+              total: latestSnapshot.discover_total,
+              dueDate: bills.find(b => b.type === 'discover')?.date,
+              dueDay: '2nd'
+            },
+            {
+              type: 'gold',
+              name: 'Gold Amex',
+              account: 'Mat',
+              color: '#f59e0b',
+              statement: latestSnapshot.gold_statement,
+              total: latestSnapshot.gold_total,
+              dueDate: bills.find(b => b.type === 'gold')?.date,
+              dueDay: '25th'
+            },
+            {
+              type: 'blue',
+              name: 'Blue Amex',
+              account: 'LIVE',
+              color: '#3b82f6',
+              statement: latestSnapshot.blue_statement,
+              total: latestSnapshot.blue_total,
+              dueDate: bills.find(b => b.type === 'blue')?.date,
+              dueDay: '11th'
+            },
+          ];
 
-              {/* Gold Amex */}
-              <div style={styles.creditCardDisplay}>
-                <div style={styles.creditCardHeader}>
-                  <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Gold Amex</span>
-                  <span style={styles.creditCardDue}>Due: 25th</span>
-                </div>
-                <div style={styles.creditCardBalances}>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
-                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.gold_total.toFixed(2)}</span>
-                  </div>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Statement</span>
-                    <span style={{
-                      ...styles.creditCardBalanceValue,
-                      color: latestSnapshot.gold_statement === 0 ? '#10b981' : '#f59e0b'
-                    }}>
-                      ${latestSnapshot.gold_statement.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                {latestSnapshot.gold_statement === 0 && (
-                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
-                )}
-                <div style={styles.creditCardPaidBy}>Paid by Mat</div>
-              </div>
+          return (
+            <section style={styles.balancesSection}>
+              <h2 style={styles.sectionTitle}>Credit Cards</h2>
+              <div style={styles.accountsGrid}>
+                {cards.map(card => {
+                  const accountType = card.account.toLowerCase();
+                  const startBalance = latestSnapshot[accountType];
+                  const paymentCalc = card.statement > 0 ? calculatePaymentDate(accountType, startBalance, card.statement, card.dueDate) : null;
+                  const paidDate = card.statement === 0 ? findPaymentDate(card.type) : null;
+                  const daysEarly = paidDate && card.dueDate ? Math.ceil((card.dueDate - paidDate) / (1000 * 60 * 60 * 24)) : null;
+                  const canPayBeforeDue = paymentCalc ? (paymentCalc.canPay && paymentCalc.dateAvailable <= card.dueDate) : false;
 
-              {/* Discover */}
-              <div style={styles.creditCardDisplay}>
-                <div style={styles.creditCardHeader}>
-                  <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Discover</span>
-                  <span style={styles.creditCardDue}>Due: 2nd</span>
-                </div>
-                <div style={styles.creditCardBalances}>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
-                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.discover_total.toFixed(2)}</span>
-                  </div>
-                  <div style={styles.creditCardBalanceRow}>
-                    <span style={styles.creditCardBalanceLabel}>Statement</span>
-                    <span style={{
-                      ...styles.creditCardBalanceValue,
-                      color: latestSnapshot.discover_statement === 0 ? '#10b981' : '#f59e0b'
-                    }}>
-                      ${latestSnapshot.discover_statement.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                {latestSnapshot.discover_statement === 0 && (
-                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
-                )}
-                <div style={styles.creditCardPaidBy}>Paid by Mara</div>
+                  return (
+                    <div key={card.type} style={styles.creditCardDisplay}>
+                      <div style={styles.creditCardHeader}>
+                        <span style={{ ...styles.balanceLabel, color: card.color }}>{card.name}</span>
+                        <span style={styles.creditCardDue}>Due: {card.dueDay}</span>
+                      </div>
+
+                      {/* Payment Status */}
+                      {card.statement === 0 ? (
+                        <>
+                          <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
+                          {paidDate && (
+                            <div style={styles.creditCardPaymentInfo}>
+                              <span style={styles.anticipatedDateGreen}>
+                                Paid on {paidDate.toLocaleDateString()}
+                              </span>
+                              {daysEarly !== null && daysEarly > 0 && (
+                                <span style={styles.anticipatedEarlyBadge}>
+                                  {daysEarly} day{daysEarly !== 1 ? 's' : ''} early
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {paymentCalc && !paymentCalc.canPay && (
+                            <div style={styles.creditCardInsufficientFunds}>
+                              ⚠ Insufficient funds by due date
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Balances */}
+                      <div style={styles.creditCardBalances}>
+                        <div style={styles.creditCardBalanceRow}>
+                          <span style={styles.creditCardBalanceLabel}>Total Balance</span>
+                          <span style={styles.creditCardBalanceValue}>${card.total.toFixed(2)}</span>
+                        </div>
+                        <div style={styles.creditCardBalanceRow}>
+                          <span style={styles.creditCardBalanceLabel}>Statement</span>
+                          <span style={{
+                            ...styles.creditCardBalanceValue,
+                            color: card.statement === 0 ? '#10b981' : '#f59e0b'
+                          }}>
+                            ${card.statement.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Show Details Button (only if statement > 0) */}
+                      {card.statement > 0 && paymentCalc && (
+                        <>
+                          <button
+                            onClick={() => setExpandedDetails(prev => ({ ...prev, [`card-${card.type}`]: !prev[`card-${card.type}`] }))}
+                            style={styles.detailsButtonSmall}
+                          >
+                            {expandedDetails[`card-${card.type}`] ? 'Hide' : 'Show'} Details
+                          </button>
+                          {expandedDetails[`card-${card.type}`] && (
+                            <div style={styles.anticipatedDetailsBox}>
+                              {paymentCalc.details}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      <div style={styles.creditCardPaidBy}>Paid by {card.account}</div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          </section>
-        )}
+            </section>
+          );
+        })()}
 
           {/* Kickback Projection */}
           {latestSnapshot && (() => {
@@ -1663,127 +1689,6 @@ export default function App() {
                 ) : (
                   <div style={styles.noKickbackAlert}>
                     No kickback projected this month. Projected LIVE at month end: ${kickbackProjection.projectedLive.toFixed(2)}
-                  </div>
-                )}
-              </section>
-            );
-          })()}
-
-          {/* Anticipated Payments */}
-          {latestSnapshot && (() => {
-            const bills = getUpcomingBills();
-            const cards = [
-              {
-                type: 'discover',
-                name: 'Discover',
-                account: 'Mara',
-                statement: latestSnapshot.discover_statement,
-                dueDate: bills.find(b => b.type === 'discover')?.date
-              },
-              {
-                type: 'gold',
-                name: 'Gold Amex',
-                account: 'Mat',
-                statement: latestSnapshot.gold_statement,
-                dueDate: bills.find(b => b.type === 'gold')?.date
-              },
-              {
-                type: 'blue',
-                name: 'Blue Amex',
-                account: 'LIVE',
-                statement: latestSnapshot.blue_statement,
-                dueDate: bills.find(b => b.type === 'blue')?.date
-              },
-            ];
-
-            return (
-              <section style={styles.anticipatedSection}>
-                <div
-                  style={styles.collapsibleHeader}
-                  onClick={() => setCollapsedSections(prev => ({ ...prev, anticipated: !prev.anticipated }))}
-                >
-                  <h2 style={styles.sectionTitle}>Anticipated Payments</h2>
-                  <span style={styles.collapseIcon}>{collapsedSections.anticipated ? '▼' : '▲'}</span>
-                </div>
-                {!collapsedSections.anticipated && (
-                  <div style={styles.anticipatedGrid}>
-                    {cards.map(card => {
-                    if (card.statement === 0) {
-                      const paidDate = findPaymentDate(card.type);
-                      const daysEarly = paidDate && card.dueDate ? Math.ceil((card.dueDate - paidDate) / (1000 * 60 * 60 * 24)) : null;
-                      return (
-                        <div key={card.type} style={styles.anticipatedItem}>
-                          <div style={styles.anticipatedHeader}>
-                            <span style={styles.anticipatedCardName}>{card.name}</span>
-                            <span style={styles.anticipatedPaidBadge}>✓ Paid</span>
-                          </div>
-                          <div style={styles.anticipatedDetails}>
-                            {paidDate ? (
-                              <>
-                                <span style={styles.anticipatedDateGreen}>
-                                  Paid on {paidDate.toLocaleDateString()}
-                                </span>
-                                {daysEarly !== null && daysEarly > 0 && (
-                                  <span style={styles.anticipatedEarlyBadge}>
-                                    {daysEarly} day{daysEarly !== 1 ? 's' : ''} early
-                                  </span>
-                                )}
-                              </>
-                            ) : (
-                              <span style={styles.anticipatedDateGreen}>Statement balance: $0.00</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const accountType = card.account.toLowerCase();
-                    const startBalance = latestSnapshot[accountType];
-                    const paymentCalc = calculatePaymentDate(accountType, startBalance, card.statement, card.dueDate);
-
-                    const canPayBeforeDue = paymentCalc.canPay && paymentCalc.dateAvailable <= card.dueDate;
-
-                    return (
-                      <div key={card.type} style={styles.anticipatedItem}>
-                        <div style={styles.anticipatedHeader}>
-                          <span style={styles.anticipatedCardName}>{card.name}</span>
-                          <span style={styles.anticipatedAmount}>${card.statement.toFixed(2)}</span>
-                        </div>
-                        <div style={styles.anticipatedDetails}>
-                          {paymentCalc.canPay ? (
-                            <>
-                              <span style={canPayBeforeDue ? styles.anticipatedDateGreen : styles.anticipatedDateRed}>
-                                Funds available: {paymentCalc.dateAvailable.toLocaleDateString()}
-                              </span>
-                              <span style={styles.anticipatedDue}>
-                                Due: {card.dueDate.toLocaleDateString()}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <span style={styles.anticipatedDateRed}>
-                                Insufficient funds by due date
-                              </span>
-                              <span style={styles.anticipatedDue}>
-                                Due: {card.dueDate.toLocaleDateString()}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => setExpandedDetails(prev => ({ ...prev, [`anticipated-${card.type}`]: !prev[`anticipated-${card.type}`] }))}
-                          style={styles.detailsButtonSmall}
-                        >
-                          {expandedDetails[`anticipated-${card.type}`] ? 'Hide' : 'Show'} Details
-                        </button>
-                        {expandedDetails[`anticipated-${card.type}`] && (
-                          <div style={styles.anticipatedDetailsBox}>
-                            {paymentCalc.details}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
                   </div>
                 )}
               </section>
@@ -2575,6 +2480,24 @@ const styles = {
     color: '#64748b',
     fontStyle: 'italic',
     textAlign: 'center',
+  },
+  creditCardInsufficientFunds: {
+    fontSize: '0.75rem',
+    color: '#ef4444',
+    backgroundColor: '#1e1414',
+    padding: '0.5rem',
+    borderRadius: '0.375rem',
+    textAlign: 'center',
+    fontWeight: '600',
+    border: '1px solid #ef4444',
+  },
+  creditCardPaymentInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+    padding: '0.5rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
   },
   kickbackProjectionSection: {
     marginBottom: '1.5rem',
