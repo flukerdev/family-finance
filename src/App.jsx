@@ -64,11 +64,11 @@ export default function App() {
   const [showScoreDetails, setShowScoreDetails] = useState(false);
   const [expandedDetails, setExpandedDetails] = useState({});
   const [collapsedSections, setCollapsedSections] = useState({
-    suggestions: true,
-    alerts: false,
-    positives: false,
-    upcoming: true,
-    anticipated: true
+    suggestions: true,     // Ways to Improve - collapsed by default
+    alerts: false,          // Attention Needed - open by default
+    positives: false,       // Looking Good - open by default
+    timeline: true,         // Upcoming - collapsed by default
+    anticipated: true       // Anticipated Payments - collapsed by default
   });
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null);
 
@@ -1130,14 +1130,51 @@ export default function App() {
           {/* Score Improvement Suggestions */}
           {scoreSuggestions.length > 0 && score < 100 && (
             <section style={styles.suggestionsSection}>
-              <h2 style={styles.sectionTitle}>💡 Ways to Improve Your Score</h2>
-              <div style={styles.suggestionsGrid}>
-                {scoreSuggestions.map((suggestion, i) => (
-                  <div key={i} style={styles.suggestionCard}>
-                    <div style={styles.suggestionHeader}>
-                      <span style={styles.suggestionCategory}>{suggestion.category}</span>
-                      <span style={styles.suggestionGain}>+{suggestion.potentialGain} pts</span>
-                    </div>
+              <div
+                style={styles.collapsibleHeader}
+                onClick={() => setCollapsedSections(prev => ({ ...prev, suggestions: !prev.suggestions }))}
+              >
+                <h2 style={styles.sectionTitle}>💡 Ways to Improve Your Score</h2>
+                <span style={styles.collapseIcon}>{collapsedSections.suggestions ? '▼' : '▲'}</span>
+              </div>
+              {!collapsedSections.suggestions && (
+                <div style={styles.suggestionsGrid}>
+                  {scoreSuggestions.map((suggestion, i) => {
+                    const projectedScore = score + suggestion.potentialGain;
+                    const isHovered = hoveredSuggestion === i;
+                    return (
+                    <div
+                      key={i}
+                      style={{
+                        ...styles.suggestionCard,
+                        transform: isHovered ? 'scale(1.02)' : 'scale(1)',
+                        boxShadow: isHovered ? '0 4px 6px -1px rgba(59, 130, 246, 0.3), 0 2px 4px -1px rgba(59, 130, 246, 0.2)' : 'none',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={() => setHoveredSuggestion(i)}
+                      onMouseLeave={() => setHoveredSuggestion(null)}
+                    >
+                      <div style={styles.suggestionHeader}>
+                        <span style={styles.suggestionCategory}>{suggestion.category}</span>
+                        <span style={styles.suggestionGain}>+{suggestion.potentialGain} pts</span>
+                      </div>
+                      {isHovered && (
+                        <div style={styles.scorePreview}>
+                          <div style={styles.scorePreviewRow}>
+                            <span>Current Score:</span>
+                            <span style={{ ...styles.scorePreviewCurrent, color: getScoreColor(score) }}>
+                              {score} ({getScoreLabel(score)})
+                            </span>
+                          </div>
+                          <div style={styles.scorePreviewArrow}>→</div>
+                          <div style={styles.scorePreviewRow}>
+                            <span>New Score:</span>
+                            <span style={{ ...styles.scorePreviewNew, color: getScoreColor(projectedScore) }}>
+                              {projectedScore} ({getScoreLabel(projectedScore)})
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     <p style={styles.suggestionText}>{suggestion.suggestion}</p>
                     <div style={styles.suggestionProgress}>
                       <span style={styles.suggestionCurrent}>{suggestion.currentPoints} / {suggestion.maxPoints}</span>
@@ -1152,16 +1189,24 @@ export default function App() {
                       <div style={styles.suggestionDetails}>{suggestion.details}</div>
                     )}
                   </div>
-                ))}
-              </div>
+                  );
+                })}
+                </div>
+              )}
             </section>
           )}
 
           {/* Alerts */}
           {alerts.length > 0 && (
             <section style={styles.alertsSection}>
-              <h2 style={{ ...styles.sectionTitle, color: '#ef4444' }}>⚠️ Attention Needed</h2>
-              {alerts.map((alert, i) => (
+              <div
+                style={styles.collapsibleHeader}
+                onClick={() => setCollapsedSections(prev => ({ ...prev, alerts: !prev.alerts }))}
+              >
+                <h2 style={{ ...styles.sectionTitle, color: '#ef4444' }}>⚠️ Attention Needed</h2>
+                <span style={styles.collapseIcon}>{collapsedSections.alerts ? '▼' : '▲'}</span>
+              </div>
+              {!collapsedSections.alerts && alerts.map((alert, i) => (
                 <div
                   key={i}
                   style={{
@@ -1218,8 +1263,14 @@ export default function App() {
           {/* Positives */}
           {positives.length > 0 && (
             <section style={styles.positivesSection}>
-              <h2 style={{ ...styles.sectionTitle, color: '#10b981' }}>✓ Looking Good</h2>
-              {positives.map((item, i) => {
+              <div
+                style={styles.collapsibleHeader}
+                onClick={() => setCollapsedSections(prev => ({ ...prev, positives: !prev.positives }))}
+              >
+                <h2 style={{ ...styles.sectionTitle, color: '#10b981' }}>✓ Looking Good</h2>
+                <span style={styles.collapseIcon}>{collapsedSections.positives ? '▼' : '▲'}</span>
+              </div>
+              {!collapsedSections.positives && positives.map((item, i) => {
                 const msg = typeof item === 'string' ? item : item.message;
                 const details = typeof item === 'object' ? item.details : null;
                 const calculation = typeof item === 'object' ? item.calculation : null;
@@ -1270,271 +1321,288 @@ export default function App() {
             </section>
           )}
 
-          {/* Account Balances & Credit Cards Combined */}
+          {/* Checking Accounts */}
           {latestSnapshot && (
             <section style={styles.balancesSection}>
-              <h2 style={styles.sectionTitle}>Accounts Overview</h2>
+              <h2 style={styles.sectionTitle}>Checking Accounts</h2>
               <div style={styles.accountsGrid}>
-                {/* Give Account - No Card */}
-                <div style={styles.accountWithCard}>
+                {/* Give and Save side-by-side */}
+                <div style={styles.sideBySideAccounts}>
                   <div style={styles.accountBalanceCard}>
                     <span style={{ ...styles.balanceLabel, color: '#8b5cf6' }}>Give</span>
                     <span style={styles.balanceValue}>${latestSnapshot.give.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                   </div>
-                </div>
-
-                {/* Save Account - No Card */}
-                <div style={styles.accountWithCard}>
                   <div style={styles.accountBalanceCard}>
                     <span style={{ ...styles.balanceLabel, color: '#10b981' }}>Save</span>
                     <span style={styles.balanceValue}>${latestSnapshot.save.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                   </div>
                 </div>
 
-                {/* Live Account + Blue Amex */}
-                <div style={styles.accountWithCard}>
-                  <div style={styles.accountBalanceCard}>
-                    <span style={{ ...styles.balanceLabel, color: '#3b82f6' }}>Live</span>
-                    <span style={styles.balanceValue}>${latestSnapshot.live.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  <div style={styles.linkedCardIndicator}>→ Pays Blue Amex</div>
-                  <div style={styles.linkedCard}>
-                    <div style={styles.linkedCardHeader}>
-                      <span style={styles.linkedCardName}>Blue Amex</span>
-                      <span style={styles.linkedCardDue}>Due: 8th</span>
-                    </div>
-                    <div style={styles.linkedCardBalances}>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Total</span>
-                        <span style={styles.linkedCardValue}>${latestSnapshot.blue_total.toFixed(2)}</span>
-                      </div>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Statement</span>
-                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.blue_statement === 0 ? '#10b981' : '#f59e0b' }}>
-                          ${latestSnapshot.blue_statement.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                    {latestSnapshot.blue_statement === 0 && (
-                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
-                    )}
-                  </div>
+                {/* Live Account */}
+                <div style={styles.accountBalanceCard}>
+                  <span style={{ ...styles.balanceLabel, color: '#3b82f6' }}>LIVE</span>
+                  <span style={styles.balanceValue}>${latestSnapshot.live.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                 </div>
 
-                {/* Mat Account + Gold Amex */}
-                <div style={styles.accountWithCard}>
-                  <div style={styles.accountBalanceCard}>
-                    <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Mat</span>
-                    <span style={styles.balanceValue}>${latestSnapshot.mat.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                    {(() => {
-                      const matDisp = calculateDisposableIncome('mat');
-                      if (!matDisp) return null;
-                      return (
-                        <>
-                          <div style={styles.disposableIncomeSection}>
-                            <span style={styles.disposableLabel}>Disposable Income:</span>
-                            <span style={{
-                              ...styles.disposableValue,
-                              color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
-                            }}>
-                              ${matDisp.disposableIncome.toFixed(2)}
-                            </span>
-                          </div>
-                          <button
-                            onClick={() => setExpandedDetails(prev => ({ ...prev, matDisposable: !prev.matDisposable }))}
-                            style={styles.detailsButtonSmall}
-                          >
-                            {expandedDetails.matDisposable ? 'Hide' : 'Show'} Calculation
-                          </button>
-                          {expandedDetails.matDisposable && (
-                            <div style={styles.disposableDetailsBox}>
-                              <div style={styles.disposableDetailRow}>
-                                <span>Current balance:</span>
-                                <span>${matDisp.accountBalance.toFixed(2)}</span>
-                              </div>
-                              <div style={styles.disposableDetailRow}>
-                                <span>- Required cushion:</span>
-                                <span>-${matDisp.cushion.toFixed(2)}</span>
-                              </div>
-                              <div style={styles.disposableDetailRow}>
-                                <span>+ Future deposits (until {matDisp.nextDueDate.toLocaleDateString()}):</span>
-                                <span>+${matDisp.futureDeposits.toFixed(2)}</span>
-                              </div>
-                              {matDisp.paydaysBeforeDue.map((pd, idx) => (
-                                <div key={idx} style={styles.disposableSubDetail}>
-                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
-                                    pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat.toFixed(2) : CONFIG.splits.matPersonalFromMara.toFixed(2)
-                                  }
-                                </div>
-                              ))}
-                              <div style={styles.disposableDetailRow}>
-                                <span>- Next payment ({matDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
-                                <span>-${matDisp.nextPaymentAmount.toFixed(2)}</span>
-                              </div>
-                              {matDisp.cardStatement > 0 && (
-                                <div style={styles.disposableSubDetail}>
-                                  Statement balance due on {matDisp.nextDueDate.toLocaleDateString()}
-                                </div>
-                              )}
-                              {matDisp.cardStatement === 0 && (
-                                <div style={styles.disposableSubDetail}>
-                                  Statement paid. Next payment = Total (${matDisp.cardTotal.toFixed(2)}) - Statement (${matDisp.cardStatement.toFixed(2)}) = ${matDisp.nextPaymentAmount.toFixed(2)}
-                                </div>
-                              )}
-                              <div style={styles.disposableDivider} />
-                              <div style={styles.disposableDetailRow}>
-                                <span style={styles.disposableTotalLabel}>Available to spend today:</span>
-                                <span style={{
-                                  ...styles.disposableTotalValue,
-                                  color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
-                                }}>
-                                  ${matDisp.disposableIncome.toFixed(2)}
-                                </span>
-                              </div>
+                {/* Mat Account */}
+                <div style={styles.accountBalanceCard}>
+                  <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Mat</span>
+                  <span style={styles.balanceValue}>${latestSnapshot.mat.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  {(() => {
+                    const matDisp = calculateDisposableIncome('mat');
+                    if (!matDisp) return null;
+                    return (
+                      <>
+                        <div style={styles.disposableIncomeSection}>
+                          <span style={styles.disposableLabel}>Disposable Income:</span>
+                          <span style={{
+                            ...styles.disposableValue,
+                            color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                          }}>
+                            ${matDisp.disposableIncome.toFixed(2)}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setExpandedDetails(prev => ({ ...prev, matDisposable: !prev.matDisposable }))}
+                          style={styles.detailsButtonSmall}
+                        >
+                          {expandedDetails.matDisposable ? 'Hide' : 'Show'} Calculation
+                        </button>
+                        {expandedDetails.matDisposable && (
+                          <div style={styles.disposableDetailsBox}>
+                            <div style={styles.disposableDetailRow}>
+                              <span>Current balance:</span>
+                              <span>${matDisp.accountBalance.toFixed(2)}</span>
                             </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </div>
-                  <div style={styles.linkedCardIndicator}>→ Pays Gold Amex</div>
-                  <div style={styles.linkedCard}>
-                    <div style={styles.linkedCardHeader}>
-                      <span style={styles.linkedCardName}>Gold Amex</span>
-                      <span style={styles.linkedCardDue}>Due: 15th</span>
-                    </div>
-                    <div style={styles.linkedCardBalances}>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Total</span>
-                        <span style={styles.linkedCardValue}>${latestSnapshot.gold_total.toFixed(2)}</span>
-                      </div>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Statement</span>
-                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.gold_statement === 0 ? '#10b981' : '#f59e0b' }}>
-                          ${latestSnapshot.gold_statement.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                    {latestSnapshot.gold_statement === 0 && (
-                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
-                    )}
-                  </div>
+                            <div style={styles.disposableDetailRow}>
+                              <span>- Required cushion:</span>
+                              <span>-${matDisp.cushion.toFixed(2)}</span>
+                            </div>
+                            <div style={styles.disposableDetailRow}>
+                              <span>+ Future deposits (until {matDisp.nextDueDate.toLocaleDateString()}):</span>
+                              <span>+${matDisp.futureDeposits.toFixed(2)}</span>
+                            </div>
+                            {matDisp.paydaysBeforeDue.map((pd, idx) => (
+                              <div key={idx} style={styles.disposableSubDetail}>
+                                {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                  pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat.toFixed(2) : CONFIG.splits.matPersonalFromMara.toFixed(2)
+                                }
+                              </div>
+                            ))}
+                            <div style={styles.disposableDetailRow}>
+                              <span>- Next payment ({matDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
+                              <span>-${matDisp.nextPaymentAmount.toFixed(2)}</span>
+                            </div>
+                            {matDisp.cardStatement > 0 && (
+                              <div style={styles.disposableSubDetail}>
+                                Statement balance due on {matDisp.nextDueDate.toLocaleDateString()}
+                              </div>
+                            )}
+                            {matDisp.cardStatement === 0 && (
+                              <div style={styles.disposableSubDetail}>
+                                Statement paid. Next payment = Total (${matDisp.cardTotal.toFixed(2)}) - Statement (${matDisp.cardStatement.toFixed(2)}) = ${matDisp.nextPaymentAmount.toFixed(2)}
+                              </div>
+                            )}
+                            <div style={styles.disposableDivider} />
+                            <div style={styles.disposableDetailRow}>
+                              <span style={styles.disposableTotalLabel}>Available to spend today:</span>
+                              <span style={{
+                                ...styles.disposableTotalValue,
+                                color: matDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                              }}>
+                                ${matDisp.disposableIncome.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
-                {/* Mara Account + Discover */}
-                <div style={styles.accountWithCard}>
-                  <div style={styles.accountBalanceCard}>
-                    <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Mara</span>
-                    <span style={styles.balanceValue}>${latestSnapshot.mara.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                    {(() => {
-                      const maraDisp = calculateDisposableIncome('mara');
-                      if (!maraDisp) return null;
-                      return (
-                        <>
-                          <div style={styles.disposableIncomeSection}>
-                            <span style={styles.disposableLabel}>Disposable Income:</span>
-                            <span style={{
-                              ...styles.disposableValue,
-                              color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
-                            }}>
-                              ${maraDisp.disposableIncome.toFixed(2)}
-                            </span>
-                          </div>
-                          <button
-                            onClick={() => setExpandedDetails(prev => ({ ...prev, maraDisposable: !prev.maraDisposable }))}
-                            style={styles.detailsButtonSmall}
-                          >
-                            {expandedDetails.maraDisposable ? 'Hide' : 'Show'} Calculation
-                          </button>
-                          {expandedDetails.maraDisposable && (
-                            <div style={styles.disposableDetailsBox}>
-                              <div style={styles.disposableDetailRow}>
-                                <span>Current balance:</span>
-                                <span>${maraDisp.accountBalance.toFixed(2)}</span>
-                              </div>
-                              <div style={styles.disposableDetailRow}>
-                                <span>- Required cushion:</span>
-                                <span>-${maraDisp.cushion.toFixed(2)}</span>
-                              </div>
-                              <div style={styles.disposableDetailRow}>
-                                <span>+ Future deposits (until {maraDisp.nextDueDate.toLocaleDateString()}):</span>
-                                <span>+${maraDisp.futureDeposits.toFixed(2)}</span>
-                              </div>
-                              {maraDisp.paydaysBeforeDue.map((pd, idx) => (
-                                <div key={idx} style={styles.disposableSubDetail}>
-                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
-                                    pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat.toFixed(2) : CONFIG.splits.maraPersonalFromMara.toFixed(2)
-                                  }
-                                </div>
-                              ))}
-                              <div style={styles.disposableDetailRow}>
-                                <span>- Next payment ({maraDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
-                                <span>-${maraDisp.nextPaymentAmount.toFixed(2)}</span>
-                              </div>
-                              {maraDisp.cardStatement > 0 && (
-                                <div style={styles.disposableSubDetail}>
-                                  Statement balance due on {maraDisp.nextDueDate.toLocaleDateString()}
-                                </div>
-                              )}
-                              {maraDisp.cardStatement === 0 && (
-                                <div style={styles.disposableSubDetail}>
-                                  Statement paid. Next payment = Total (${maraDisp.cardTotal.toFixed(2)}) - Statement (${maraDisp.cardStatement.toFixed(2)}) = ${maraDisp.nextPaymentAmount.toFixed(2)}
-                                </div>
-                              )}
-                              <div style={styles.disposableDivider} />
-                              <div style={styles.disposableDetailRow}>
-                                <span style={styles.disposableTotalLabel}>Available to spend today:</span>
-                                <span style={{
-                                  ...styles.disposableTotalValue,
-                                  color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
-                                }}>
-                                  ${maraDisp.disposableIncome.toFixed(2)}
-                                </span>
-                              </div>
+                {/* Mara Account */}
+                <div style={styles.accountBalanceCard}>
+                  <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Mara</span>
+                  <span style={styles.balanceValue}>${latestSnapshot.mara.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  {(() => {
+                    const maraDisp = calculateDisposableIncome('mara');
+                    if (!maraDisp) return null;
+                    return (
+                      <>
+                        <div style={styles.disposableIncomeSection}>
+                          <span style={styles.disposableLabel}>Disposable Income:</span>
+                          <span style={{
+                            ...styles.disposableValue,
+                            color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                          }}>
+                            ${maraDisp.disposableIncome.toFixed(2)}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setExpandedDetails(prev => ({ ...prev, maraDisposable: !prev.maraDisposable }))}
+                          style={styles.detailsButtonSmall}
+                        >
+                          {expandedDetails.maraDisposable ? 'Hide' : 'Show'} Calculation
+                        </button>
+                        {expandedDetails.maraDisposable && (
+                          <div style={styles.disposableDetailsBox}>
+                            <div style={styles.disposableDetailRow}>
+                              <span>Current balance:</span>
+                              <span>${maraDisp.accountBalance.toFixed(2)}</span>
                             </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </div>
-                  <div style={styles.linkedCardIndicator}>→ Pays Discover</div>
-                  <div style={styles.linkedCard}>
-                    <div style={styles.linkedCardHeader}>
-                      <span style={styles.linkedCardName}>Discover</span>
-                      <span style={styles.linkedCardDue}>Due: 2nd</span>
-                    </div>
-                    <div style={styles.linkedCardBalances}>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Total</span>
-                        <span style={styles.linkedCardValue}>${latestSnapshot.discover_total.toFixed(2)}</span>
-                      </div>
-                      <div style={styles.linkedCardBalanceItem}>
-                        <span style={styles.linkedCardLabel}>Statement</span>
-                        <span style={{ ...styles.linkedCardValue, color: latestSnapshot.discover_statement === 0 ? '#10b981' : '#f59e0b' }}>
-                          ${latestSnapshot.discover_statement.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                    {latestSnapshot.discover_statement === 0 && (
-                      <div style={styles.linkedCardPaidBadge}>✓ Statement Paid</div>
-                    )}
-                  </div>
+                            <div style={styles.disposableDetailRow}>
+                              <span>- Required cushion:</span>
+                              <span>-${maraDisp.cushion.toFixed(2)}</span>
+                            </div>
+                            <div style={styles.disposableDetailRow}>
+                              <span>+ Future deposits (until {maraDisp.nextDueDate.toLocaleDateString()}):</span>
+                              <span>+${maraDisp.futureDeposits.toFixed(2)}</span>
+                            </div>
+                            {maraDisp.paydaysBeforeDue.map((pd, idx) => (
+                              <div key={idx} style={styles.disposableSubDetail}>
+                                {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                  pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat.toFixed(2) : CONFIG.splits.maraPersonalFromMara.toFixed(2)
+                                }
+                              </div>
+                            ))}
+                            <div style={styles.disposableDetailRow}>
+                              <span>- Next payment ({maraDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
+                              <span>-${maraDisp.nextPaymentAmount.toFixed(2)}</span>
+                            </div>
+                            {maraDisp.cardStatement > 0 && (
+                              <div style={styles.disposableSubDetail}>
+                                Statement balance due on {maraDisp.nextDueDate.toLocaleDateString()}
+                              </div>
+                            )}
+                            {maraDisp.cardStatement === 0 && (
+                              <div style={styles.disposableSubDetail}>
+                                Statement paid. Next payment = Total (${maraDisp.cardTotal.toFixed(2)}) - Statement (${maraDisp.cardStatement.toFixed(2)}) = ${maraDisp.nextPaymentAmount.toFixed(2)}
+                              </div>
+                            )}
+                            <div style={styles.disposableDivider} />
+                            <div style={styles.disposableDetailRow}>
+                              <span style={styles.disposableTotalLabel}>Available to spend today:</span>
+                              <span style={{
+                                ...styles.disposableTotalValue,
+                                color: maraDisp.disposableIncome >= 0 ? '#10b981' : '#ef4444'
+                              }}>
+                                ${maraDisp.disposableIncome.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </section>
           )}
+
+        {/* Credit Cards */}
+        {latestSnapshot && (
+          <section style={styles.balancesSection}>
+            <h2 style={styles.sectionTitle}>Credit Cards</h2>
+            <div style={styles.accountsGrid}>
+              {/* Blue Amex */}
+              <div style={styles.creditCardDisplay}>
+                <div style={styles.creditCardHeader}>
+                  <span style={{ ...styles.balanceLabel, color: '#3b82f6' }}>Blue Amex</span>
+                  <span style={styles.creditCardDue}>Due: 11th</span>
+                </div>
+                <div style={styles.creditCardBalances}>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
+                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.blue_total.toFixed(2)}</span>
+                  </div>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Statement</span>
+                    <span style={{
+                      ...styles.creditCardBalanceValue,
+                      color: latestSnapshot.blue_statement === 0 ? '#10b981' : '#f59e0b'
+                    }}>
+                      ${latestSnapshot.blue_statement.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                {latestSnapshot.blue_statement === 0 && (
+                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
+                )}
+                <div style={styles.creditCardPaidBy}>Paid by LIVE</div>
+              </div>
+
+              {/* Gold Amex */}
+              <div style={styles.creditCardDisplay}>
+                <div style={styles.creditCardHeader}>
+                  <span style={{ ...styles.balanceLabel, color: '#f59e0b' }}>Gold Amex</span>
+                  <span style={styles.creditCardDue}>Due: 25th</span>
+                </div>
+                <div style={styles.creditCardBalances}>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
+                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.gold_total.toFixed(2)}</span>
+                  </div>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Statement</span>
+                    <span style={{
+                      ...styles.creditCardBalanceValue,
+                      color: latestSnapshot.gold_statement === 0 ? '#10b981' : '#f59e0b'
+                    }}>
+                      ${latestSnapshot.gold_statement.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                {latestSnapshot.gold_statement === 0 && (
+                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
+                )}
+                <div style={styles.creditCardPaidBy}>Paid by Mat</div>
+              </div>
+
+              {/* Discover */}
+              <div style={styles.creditCardDisplay}>
+                <div style={styles.creditCardHeader}>
+                  <span style={{ ...styles.balanceLabel, color: '#ec4899' }}>Discover</span>
+                  <span style={styles.creditCardDue}>Due: 2nd</span>
+                </div>
+                <div style={styles.creditCardBalances}>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Total Balance</span>
+                    <span style={styles.creditCardBalanceValue}>${latestSnapshot.discover_total.toFixed(2)}</span>
+                  </div>
+                  <div style={styles.creditCardBalanceRow}>
+                    <span style={styles.creditCardBalanceLabel}>Statement</span>
+                    <span style={{
+                      ...styles.creditCardBalanceValue,
+                      color: latestSnapshot.discover_statement === 0 ? '#10b981' : '#f59e0b'
+                    }}>
+                      ${latestSnapshot.discover_statement.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                {latestSnapshot.discover_statement === 0 && (
+                  <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
+                )}
+                <div style={styles.creditCardPaidBy}>Paid by Mara</div>
+              </div>
+            </div>
+          </section>
+        )}
 
           {/* Kickback Projection */}
           {latestSnapshot && (() => {
             const kickbackProjection = calculateProjectedKickback();
             if (!kickbackProjection) return null;
             return (
-              <section style={styles.kickbackProjectionSection}>
-                <h2 style={styles.sectionTitle}>End-of-Month Projection</h2>
+              <section style={styles.kickbackProjectionSectionLarge}>
+                <h2 style={styles.kickbackMainTitle}>💰 Projected Kickback</h2>
                 {kickbackProjection.potentialKickback > 0 ? (
                   <div style={styles.kickbackSection}>
-                    <div style={styles.kickbackAlert}>
-                      🎉 Projected Kickback: ${kickbackProjection.potentialKickback.toFixed(2)} (${kickbackProjection.kickbackEach.toFixed(2)} each!)
+                    <div style={styles.kickbackMainAmount}>
+                      ${kickbackProjection.kickbackEach.toFixed(2)}
+                    </div>
+                    <div style={styles.kickbackPerPersonLabel}>per person</div>
+                    <div style={styles.kickbackTotalDisplay}>
+                      Total: ${kickbackProjection.potentialKickback.toFixed(2)}
                     </div>
                     <button
                       onClick={() => setExpandedDetails(prev => ({ ...prev, dashboardKickback: !prev.dashboardKickback }))}
@@ -1630,9 +1698,16 @@ export default function App() {
 
             return (
               <section style={styles.anticipatedSection}>
-                <h2 style={styles.sectionTitle}>Anticipated Payments</h2>
-                <div style={styles.anticipatedGrid}>
-                  {cards.map(card => {
+                <div
+                  style={styles.collapsibleHeader}
+                  onClick={() => setCollapsedSections(prev => ({ ...prev, anticipated: !prev.anticipated }))}
+                >
+                  <h2 style={styles.sectionTitle}>Anticipated Payments</h2>
+                  <span style={styles.collapseIcon}>{collapsedSections.anticipated ? '▼' : '▲'}</span>
+                </div>
+                {!collapsedSections.anticipated && (
+                  <div style={styles.anticipatedGrid}>
+                    {cards.map(card => {
                     if (card.statement === 0) {
                       const paidDate = findPaymentDate(card.type);
                       const daysEarly = paidDate && card.dueDate ? Math.ceil((card.dueDate - paidDate) / (1000 * 60 * 60 * 24)) : null;
@@ -1709,19 +1784,27 @@ export default function App() {
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                )}
               </section>
             );
           })()}
 
           {/* Timeline */}
           <section style={styles.timelineSection}>
-            <h2 style={styles.sectionTitle}>Upcoming</h2>
-            <div style={styles.timeline}>
-              {[...getUpcomingBills(), ...getUpcomingPaydays()]
-                .sort((a, b) => a.date - b.date)
-                .slice(0, 8)
-                .map((event, i) => (
+            <div
+              style={styles.collapsibleHeader}
+              onClick={() => setCollapsedSections(prev => ({ ...prev, timeline: !prev.timeline }))}
+            >
+              <h2 style={styles.sectionTitle}>Upcoming</h2>
+              <span style={styles.collapseIcon}>{collapsedSections.timeline ? '▼' : '▲'}</span>
+            </div>
+            {!collapsedSections.timeline && (
+              <div style={styles.timeline}>
+                {[...getUpcomingBills(), ...getUpcomingPaydays()]
+                  .sort((a, b) => a.date - b.date)
+                  .slice(0, 8)
+                  .map((event, i) => (
                   <div key={i} style={styles.timelineItem}>
                     <div style={styles.timelineDate}>
                       <span style={styles.timelineDays}>{getDaysUntil(event.date)}</span>
@@ -1746,7 +1829,8 @@ export default function App() {
                     </div>
                   </div>
                 ))}
-            </div>
+              </div>
+            )}
           </section>
         </main>
       )}
@@ -2115,6 +2199,24 @@ const styles = {
     letterSpacing: '0.05em',
     marginBottom: '1rem',
   },
+  collapsibleHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    cursor: 'pointer',
+    marginBottom: '1rem',
+    padding: '0.5rem',
+    borderRadius: '0.375rem',
+    transition: 'background-color 0.2s',
+    '&:hover': {
+      backgroundColor: '#1e293b',
+    },
+  },
+  collapseIcon: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+    transition: 'transform 0.2s',
+  },
   suggestionsSection: {
     marginBottom: '1.5rem',
   },
@@ -2168,6 +2270,37 @@ const styles = {
     fontSize: '0.75rem',
     color: '#94a3b8',
     fontStyle: 'italic',
+  },
+  scorePreview: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+    marginBottom: '0.75rem',
+    gap: '0.5rem',
+    border: '1px solid #3b82f6',
+  },
+  scorePreviewRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.25rem',
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+  },
+  scorePreviewCurrent: {
+    fontSize: '0.875rem',
+    fontWeight: '600',
+  },
+  scorePreviewNew: {
+    fontSize: '0.875rem',
+    fontWeight: '700',
+  },
+  scorePreviewArrow: {
+    fontSize: '1.25rem',
+    color: '#3b82f6',
+    fontWeight: '700',
   },
   alertsSection: {
     marginBottom: '1.5rem',
@@ -2384,8 +2517,106 @@ const styles = {
     fontWeight: '700',
     fontSize: '0.875rem',
   },
+  sideBySideAccounts: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '0.75rem',
+  },
+  creditCardDisplay: {
+    padding: '1rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  creditCardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  creditCardDue: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+  },
+  creditCardBalances: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  creditCardBalanceRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '0.5rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+  },
+  creditCardBalanceLabel: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    textTransform: 'uppercase',
+  },
+  creditCardBalanceValue: {
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  creditCardPaidBadge: {
+    fontSize: '0.625rem',
+    color: '#10b981',
+    backgroundColor: '#022c22',
+    padding: '0.25rem 0.5rem',
+    borderRadius: '0.25rem',
+    textAlign: 'center',
+  },
+  creditCardPaidBy: {
+    fontSize: '0.625rem',
+    color: '#64748b',
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
   kickbackProjectionSection: {
     marginBottom: '1.5rem',
+  },
+  kickbackProjectionSectionLarge: {
+    marginBottom: '2rem',
+    padding: '1.5rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.75rem',
+    border: '2px solid #3b82f6',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)',
+  },
+  kickbackMainTitle: {
+    fontSize: '1.125rem',
+    fontWeight: '700',
+    color: '#10b981',
+    textAlign: 'center',
+    marginBottom: '1rem',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  kickbackMainAmount: {
+    fontSize: '3rem',
+    fontWeight: '700',
+    color: '#10b981',
+    textAlign: 'center',
+    lineHeight: '1',
+  },
+  kickbackPerPersonLabel: {
+    fontSize: '0.875rem',
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: '0.5rem',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  kickbackTotalDisplay: {
+    fontSize: '1rem',
+    color: '#64748b',
+    textAlign: 'center',
+    marginTop: '0.75rem',
+    fontStyle: 'italic',
   },
   anticipatedSection: {
     marginBottom: '1.5rem',
