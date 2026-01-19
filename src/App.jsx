@@ -1071,9 +1071,9 @@ export default function App() {
                   cy="50"
                   r="45"
                   fill="none"
-                  stroke={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreColor(score)}
+                  stroke={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(Number(score) + Number(scoreSuggestions[hoveredSuggestion].potentialGain)) : getScoreColor(score)}
                   strokeWidth="8"
-                  strokeDasharray={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? `${(score + scoreSuggestions[hoveredSuggestion].potentialGain) * 2.83} 283` : `${score * 2.83} 283`}
+                  strokeDasharray={hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? `${(Number(score) + Number(scoreSuggestions[hoveredSuggestion].potentialGain)) * 2.83} 283` : `${score * 2.83} 283`}
                   strokeLinecap="round"
                   transform="rotate(-90 50 50)"
                   style={{ transition: 'stroke-dasharray 0.5s ease, stroke 0.5s ease' }}
@@ -1082,13 +1082,13 @@ export default function App() {
               <div style={styles.scoreText}>
                 <span style={{
                   ...styles.scoreNumber,
-                  color: hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreColor(score),
+                  color: hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreColor(Number(score) + Number(scoreSuggestions[hoveredSuggestion].potentialGain)) : getScoreColor(score),
                   transition: 'color 0.5s ease'
                 }}>
-                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? score + scoreSuggestions[hoveredSuggestion].potentialGain : score}
+                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? Number(score) + Number(scoreSuggestions[hoveredSuggestion].potentialGain) : score}
                 </span>
                 <span style={{ ...styles.scoreLabel, transition: 'all 0.5s ease' }}>
-                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreLabel(score + scoreSuggestions[hoveredSuggestion].potentialGain) : getScoreLabel(score)}
+                  {hoveredSuggestion !== null && scoreSuggestions[hoveredSuggestion] ? getScoreLabel(Number(score) + Number(scoreSuggestions[hoveredSuggestion].potentialGain)) : getScoreLabel(score)}
                 </span>
               </div>
             </div>
