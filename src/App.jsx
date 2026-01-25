@@ -133,7 +133,7 @@ export default function App() {
 
     if (error) {
       console.error('Error saving snapshot:', error);
-      setMessage('Error saving. Please try again.');
+      setMessage(`Error saving: ${error.message || error.error_description || 'Please check browser console for details'}`);
     } else {
       setMessage('Balances saved!');
       setLatestSnapshot(data[0]);
