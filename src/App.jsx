@@ -2440,7 +2440,7 @@ export default function App() {
                     saveConfig(tempConfig);
                     setTimeout(() => setMessage(''), 3000);
                   }}
-                  style={styles.saveButton}
+                  style={styles.settingsSaveButton}
                 >
                   Save Settings
                 </button>
@@ -3651,7 +3651,7 @@ const styles = {
     justifyContent: 'center',
     marginTop: '1rem',
   },
-  saveButton: {
+  settingsSaveButton: {
     padding: '0.75rem 2rem',
     backgroundColor: '#3b82f6',
     border: 'none',
