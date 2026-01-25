@@ -7,11 +7,12 @@ A clean, simple family finance tracking app for Mat & Mara. No authentication, n
 - 📊 **Dashboard**: Real-time view of all account balances with health score
 - 💰 **Update Tab**: Quick balance updates saved to Supabase
 - 📈 **Reports Tab**: Weekly financial tracking and trends
+- ⚙️ **Settings Tab**: Edit all configuration values (pay amounts, splits, due dates, monthly bills)
 
 ## Stack
 
 - React + Vite
-- Supabase (single table: `balance_snapshots`)
+- Supabase (two tables: `balance_snapshots` and `app_config`)
 - No authentication, no routing complexity
 
 ## Setup
@@ -29,7 +30,11 @@ A clean, simple family finance tracking app for Mat & Mara. No authentication, n
    ```
 
 3. **Set up database**:
-   The app uses a single table: `balance_snapshots`
+   The app uses two tables:
+   - `balance_snapshots` - stores balance history
+   - `app_config` - stores application settings
+
+   Run [create-config-table.sql](create-config-table.sql) in your Supabase SQL Editor to create the config table with default values.
 
    If you need to clean up old auth tables from previous versions, run [cleanup-auth-tables.sql](cleanup-auth-tables.sql) in your Supabase SQL Editor.
 
@@ -73,6 +78,7 @@ CREATE POLICY "Enable insert access for all users" ON balance_snapshots
 1. **Dashboard**: View your financial health score and current balances
 2. **Update**: Enter new balances and click "Save Snapshot"
 3. **Reports**: Review weekly changes and trends
+4. **Settings**: Edit pay amounts, budget splits, due dates, and monthly bills (syncs across all devices via Supabase)
 
 ## Production
 
@@ -88,7 +94,8 @@ Deploy the `dist` folder to your hosting service.
 - This is the simple version for personal use
 - A SaaS version with authentication is being developed separately
 - All buttons are functional and tested
-- Hardcoded payday schedules in CONFIG object (easy to modify in src/App.jsx)
+- Settings are stored in Supabase and sync across all devices
+- Payday schedules are hardcoded in the app (Mat: 1st & 15th, Mara: 1st & 15th)
 
 ## License
 

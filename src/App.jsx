@@ -6,8 +6,8 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Pay schedule configuration
-const CONFIG = {
+// Default configuration
+const DEFAULT_CONFIG = {
   matPayAmount: 2018.55,
   maraPayAmount: 1302.06,
   splits: {
@@ -33,16 +33,9 @@ const CONFIG = {
   }
 };
 
-// Calculate Mat and Mara's personal split from each paycheck
-const matRemainder = CONFIG.matPayAmount - (CONFIG.matPayAmount * CONFIG.splits.give) - (CONFIG.matPayAmount * CONFIG.splits.save) - CONFIG.splits.matLive;
-const maraRemainder = CONFIG.maraPayAmount - (CONFIG.maraPayAmount * CONFIG.splits.give) - (CONFIG.maraPayAmount * CONFIG.splits.save) - CONFIG.splits.maraLive;
-CONFIG.splits.matPersonalFromMat = matRemainder / 2;
-CONFIG.splits.maraPersonalFromMat = matRemainder / 2;
-CONFIG.splits.matPersonalFromMara = maraRemainder / 2;
-CONFIG.splits.maraPersonalFromMara = maraRemainder / 2;
-
 export default function App() {
   const [currentView, setCurrentView] = useState('dashboard');
+  const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [balances, setBalances] = useState({
     give: '',
     save: '',
@@ -71,11 +64,112 @@ export default function App() {
     anticipated: true       // Anticipated Payments - collapsed by default
   });
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null);
+  const [tempConfig, setTempConfig] = useState(config);
 
-  // Fetch latest snapshot on load
+  // Calculate personal splits based on config
+  const getPersonalSplits = () => {
+    const matRemainder = config.matPayAmount - (config.matPayAmount * config.splits.give) - (config.matPayAmount * config.splits.save) - config.splits.matLive;
+    const maraRemainder = config.maraPayAmount - (config.maraPayAmount * config.splits.give) - (config.maraPayAmount * config.splits.save) - config.splits.maraLive;
+    return {
+      matPersonalFromMat: matRemainder / 2,
+      maraPersonalFromMat: matRemainder / 2,
+      matPersonalFromMara: maraRemainder / 2,
+      maraPersonalFromMara: maraRemainder / 2,
+    };
+  };
+
+  // Fetch config from Supabase
+  const fetchConfig = async () => {
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('Error fetching config:', error);
+      setConfig(DEFAULT_CONFIG);
+    } else if (data && data.length > 0) {
+      const dbConfig = data[0];
+      const loadedConfig = {
+        matPayAmount: parseFloat(dbConfig.mat_pay_amount),
+        maraPayAmount: parseFloat(dbConfig.mara_pay_amount),
+        splits: {
+          give: parseFloat(dbConfig.split_give),
+          save: parseFloat(dbConfig.split_save),
+          matLive: parseFloat(dbConfig.split_mat_live),
+          maraLive: parseFloat(dbConfig.split_mara_live),
+        },
+        dueDates: {
+          blue: parseInt(dbConfig.due_date_blue),
+          gold: parseInt(dbConfig.due_date_gold),
+          discover: parseInt(dbConfig.due_date_discover),
+          rent: dbConfig.due_date_rent,
+        },
+        monthlyBills: {
+          rent: parseFloat(dbConfig.monthly_rent),
+          insurance: parseFloat(dbConfig.monthly_insurance),
+          gym: parseFloat(dbConfig.monthly_gym),
+          dateNights: parseFloat(dbConfig.monthly_date_nights),
+          power: parseFloat(dbConfig.monthly_power),
+          groceries: parseFloat(dbConfig.monthly_groceries),
+          gas: parseFloat(dbConfig.monthly_gas),
+        }
+      };
+      setConfig(loadedConfig);
+    } else {
+      setConfig(DEFAULT_CONFIG);
+    }
+  };
+
+  // Save config to Supabase
+  const saveConfig = async (newConfig) => {
+    const configData = {
+      mat_pay_amount: newConfig.matPayAmount,
+      mara_pay_amount: newConfig.maraPayAmount,
+      split_give: newConfig.splits.give,
+      split_save: newConfig.splits.save,
+      split_mat_live: newConfig.splits.matLive,
+      split_mara_live: newConfig.splits.maraLive,
+      due_date_blue: newConfig.dueDates.blue,
+      due_date_gold: newConfig.dueDates.gold,
+      due_date_discover: newConfig.dueDates.discover,
+      due_date_rent: newConfig.dueDates.rent,
+      monthly_rent: newConfig.monthlyBills.rent,
+      monthly_insurance: newConfig.monthlyBills.insurance,
+      monthly_gym: newConfig.monthlyBills.gym,
+      monthly_date_nights: newConfig.monthlyBills.dateNights,
+      monthly_power: newConfig.monthlyBills.power,
+      monthly_groceries: newConfig.monthlyBills.groceries,
+      monthly_gas: newConfig.monthlyBills.gas,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from('app_config')
+      .insert(configData);
+
+    if (error) {
+      console.error('Error saving config:', error);
+      setMessage('Error saving settings!');
+    } else {
+      setConfig(newConfig);
+      setMessage('Settings saved!');
+    }
+  };
+
+  // Fetch latest snapshot and config on load
   useEffect(() => {
     fetchSnapshots();
+    fetchConfig();
   }, []);
+
+  // Sync tempConfig with config when switching to settings
+  useEffect(() => {
+    if (currentView === 'settings') {
+      setTempConfig(config);
+    }
+  }, [currentView, config]);
 
   const fetchSnapshots = async () => {
     setLoading(true);
@@ -166,10 +260,10 @@ export default function App() {
     // Get next 4 paydays
     for (let i = 0; i < 4; i++) {
       if (maraNext <= matNext) {
-        paydays.push({ date: new Date(maraNext), type: 'mara', amount: CONFIG.maraPayAmount });
+        paydays.push({ date: new Date(maraNext), type: 'mara', amount: config.maraPayAmount });
         maraNext.setDate(maraNext.getDate() + 14);
       } else {
-        paydays.push({ date: new Date(matNext), type: 'mat', amount: CONFIG.matPayAmount });
+        paydays.push({ date: new Date(matNext), type: 'mat', amount: config.matPayAmount });
         matNext.setDate(matNext.getDate() + 14);
       }
     }
@@ -211,7 +305,7 @@ export default function App() {
       // Rent - last day of month
       const lastDay = new Date(year, month + 1, 0);
       if (lastDay >= today) {
-        bills.push({ date: lastDay, type: 'rent', name: 'Rent', account: 'live', amount: CONFIG.monthlyBills.rent });
+        bills.push({ date: lastDay, type: 'rent', name: 'Rent', account: 'live', amount: config.monthlyBills.rent });
       }
     }
 
@@ -294,19 +388,20 @@ export default function App() {
     today.setHours(0, 0, 0, 0);
     let projectedBalance = startBalance;
     const paydays = getUpcomingPaydays();
+    const personalSplits = getPersonalSplits();
 
     for (const payday of paydays) {
       if (payday.date > dueDate) break;
 
       if (accountType === 'live') {
-        if (payday.type === 'mat') projectedBalance += CONFIG.splits.matLive;
-        if (payday.type === 'mara') projectedBalance += CONFIG.splits.maraLive;
+        if (payday.type === 'mat') projectedBalance += config.splits.matLive;
+        if (payday.type === 'mara') projectedBalance += config.splits.maraLive;
       } else if (accountType === 'mat') {
-        if (payday.type === 'mat') projectedBalance += CONFIG.splits.matPersonalFromMat;
-        if (payday.type === 'mara') projectedBalance += CONFIG.splits.matPersonalFromMara;
+        if (payday.type === 'mat') projectedBalance += personalSplits.matPersonalFromMat;
+        if (payday.type === 'mara') projectedBalance += personalSplits.matPersonalFromMara;
       } else if (accountType === 'mara') {
-        if (payday.type === 'mat') projectedBalance += CONFIG.splits.maraPersonalFromMat;
-        if (payday.type === 'mara') projectedBalance += CONFIG.splits.maraPersonalFromMara;
+        if (payday.type === 'mat') projectedBalance += personalSplits.maraPersonalFromMat;
+        if (payday.type === 'mara') projectedBalance += personalSplits.maraPersonalFromMara;
       }
 
       if (projectedBalance >= statementAmount) {
@@ -367,16 +462,17 @@ export default function App() {
 
     // Calculate paychecks before next due date
     const paydays = getUpcomingPaydays();
+    const personalSplits = getPersonalSplits();
     let futureDeposits = 0;
 
     for (const payday of paydays) {
       if (payday.date <= nextDueDate) {
         if (person === 'mat') {
-          if (payday.type === 'mat') futureDeposits += CONFIG.splits.matPersonalFromMat;
-          if (payday.type === 'mara') futureDeposits += CONFIG.splits.matPersonalFromMara;
+          if (payday.type === 'mat') futureDeposits += personalSplits.matPersonalFromMat;
+          if (payday.type === 'mara') futureDeposits += personalSplits.matPersonalFromMara;
         } else if (person === 'mara') {
-          if (payday.type === 'mat') futureDeposits += CONFIG.splits.maraPersonalFromMat;
-          if (payday.type === 'mara') futureDeposits += CONFIG.splits.maraPersonalFromMara;
+          if (payday.type === 'mat') futureDeposits += personalSplits.maraPersonalFromMat;
+          if (payday.type === 'mara') futureDeposits += personalSplits.maraPersonalFromMara;
         }
       }
     }
@@ -405,13 +501,14 @@ export default function App() {
   const generateDisposableCalculation = (dispData, person) => {
     if (!dispData) return 'No data available';
 
+    const personalSplits = getPersonalSplits();
     let calc = `Current balance: $${dispData.accountBalance.toFixed(2)}\n`;
     calc += `- Required cushion: -$${dispData.cushion.toFixed(2)}\n`;
     calc += `+ Future deposits (until ${dispData.nextDueDate.toLocaleDateString()}): +$${dispData.futureDeposits.toFixed(2)}\n`;
     dispData.paydaysBeforeDue.forEach(pd => {
       const amount = person === 'Mat'
-        ? (pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara)
-        : (pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara);
+        ? (pd.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara)
+        : (pd.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara);
       calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
     });
     calc += `- Next payment (${dispData.cardStatement > 0 ? 'statement' : 'next bill'}): -$${dispData.nextPaymentAmount.toFixed(2)}\n`;
@@ -430,17 +527,18 @@ export default function App() {
 
     const paydays = getUpcomingPaydays();
     const relevantPaydays = paydays.filter(p => p.date <= dueDate);
+    const personalSplits = getPersonalSplits();
 
     let calc = `Current ${accountType.toUpperCase()} balance: $${startBalance.toFixed(2)}\n`;
 
     if (relevantPaydays.length > 0) {
       const totalInflow = relevantPaydays.reduce((sum, p) => {
         if (accountType === 'live') {
-          return sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive);
+          return sum + (p.type === 'mat' ? config.splits.matLive : config.splits.maraLive);
         } else if (accountType === 'mat') {
-          return sum + (p.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara);
+          return sum + (p.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara);
         } else if (accountType === 'mara') {
-          return sum + (p.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara);
+          return sum + (p.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara);
         }
         return sum;
       }, 0);
@@ -450,11 +548,11 @@ export default function App() {
       relevantPaydays.forEach(pd => {
         let amount = 0;
         if (accountType === 'live') {
-          amount = pd.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive;
+          amount = pd.type === 'mat' ? config.splits.matLive : config.splits.maraLive;
         } else if (accountType === 'mat') {
-          amount = pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat : CONFIG.splits.matPersonalFromMara;
+          amount = pd.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara;
         } else if (accountType === 'mara') {
-          amount = pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat : CONFIG.splits.maraPersonalFromMara;
+          amount = pd.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara;
         }
         calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
       });
@@ -505,22 +603,20 @@ export default function App() {
     // Add all paychecks before end of month
     for (const payday of paydays) {
       if (payday.date <= endOfMonth) {
-        if (payday.type === 'mat') projectedLive += CONFIG.splits.matLive;
-        if (payday.type === 'mara') projectedLive += CONFIG.splits.maraLive;
+        if (payday.type === 'mat') projectedLive += config.splits.matLive;
+        if (payday.type === 'mara') projectedLive += config.splits.maraLive;
       }
     }
 
     // Subtract rent if due this month
     const rentBill = bills.find(b => b.type === 'rent' && b.date <= endOfMonth);
     if (rentBill) {
-      projectedLive -= CONFIG.monthlyBills.rent;
+      projectedLive -= config.monthlyBills.rent;
     }
 
-    // Subtract Blue Amex statement if due this month
-    const blueBill = bills.find(b => b.type === 'blue' && b.date <= endOfMonth);
-    if (blueBill) {
-      projectedLive -= latestSnapshot.blue_statement;
-    }
+    // Subtract Blue Amex TOTAL balance (must be paid off before kickback)
+    const blueTotalBalance = latestSnapshot.blue_total || 0;
+    projectedLive -= blueTotalBalance;
 
     // Subtract projected remaining monthly expenses
     const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
@@ -529,7 +625,7 @@ export default function App() {
     const monthProgress = dayOfMonth / daysInMonth;
 
     // Calculate how much of monthly budget should be spent so far
-    const monthlyVariableExpenses = CONFIG.monthlyBills.groceries + CONFIG.monthlyBills.gas + CONFIG.monthlyBills.dateNights + CONFIG.monthlyBills.power + CONFIG.monthlyBills.gym + CONFIG.monthlyBills.insurance;
+    const monthlyVariableExpenses = config.monthlyBills.groceries + config.monthlyBills.gas + config.monthlyBills.dateNights + config.monthlyBills.power + config.monthlyBills.gym + config.monthlyBills.insurance;
     const projectedRemainingExpenses = monthlyVariableExpenses * (1 - monthProgress);
 
     projectedLive -= projectedRemainingExpenses;
@@ -545,9 +641,9 @@ export default function App() {
       details: {
         startingBalance: latestSnapshot.live,
         projectedInflows: paydays.filter(p => p.date <= endOfMonth).reduce((sum, p) =>
-          sum + (p.type === 'mat' ? CONFIG.splits.matLive : CONFIG.splits.maraLive), 0),
-        rent: rentBill ? CONFIG.monthlyBills.rent : 0,
-        blueAmex: blueBill ? latestSnapshot.blue_statement : 0,
+          sum + (p.type === 'mat' ? config.splits.matLive : config.splits.maraLive), 0),
+        rent: rentBill ? config.monthlyBills.rent : 0,
+        blueAmex: blueTotalBalance,
         projectedRemainingExpenses,
         safetyBuffer: 150,
         daysRemaining,
@@ -710,21 +806,21 @@ export default function App() {
     // Check Rent (LIVE)
     const nextRent = bills.find(b => b.type === 'rent');
     if (nextRent) {
-      const rentCheck = calculatePaymentDate('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date);
+      const rentCheck = calculatePaymentDate('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date);
       billChecks.push({
         name: 'Rent',
         account: 'LIVE',
         dueDate: nextRent.date,
-        statement: CONFIG.monthlyBills.rent,
+        statement: config.monthlyBills.rent,
         ...rentCheck
       });
 
       if (rentCheck.canPay) {
         const daysEarly = Math.ceil((nextRent.date - rentCheck.dateAvailable) / (1000 * 60 * 60 * 24));
         positives.push({
-          message: `LIVE is on pace to cover Rent ($${CONFIG.monthlyBills.rent.toFixed(2)})`,
+          message: `LIVE is on pace to cover Rent ($${config.monthlyBills.rent.toFixed(2)})`,
           details: rentCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date, rentCheck),
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date, rentCheck),
           daysEarly
         });
       } else {
@@ -732,7 +828,7 @@ export default function App() {
           severity: 'critical',
           message: `LIVE won't have enough for Rent by ${nextRent.date.toLocaleDateString()}. Short $${rentCheck.shortfall.toFixed(2)}.`,
           details: rentCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, CONFIG.monthlyBills.rent, nextRent.date, rentCheck)
+          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date, rentCheck)
         });
       }
     }
@@ -798,63 +894,51 @@ export default function App() {
       scoreBreakdown.details.kickback = 'Unable to calculate kickback projection';
     }
 
-    // SCORING: 10 points for Prompt Payments
-    // Find when each statement was paid off (if paid)
-    const paymentDates = {
-      discover: findPaymentDate('discover'),
-      gold: findPaymentDate('gold'),
-      blue: findPaymentDate('blue')
-    };
+    // SCORING: 10 points for Credit Card Payoff Ability
+    // Check if we can pay off total balance by due date while keeping $150 cushion
+    const cardPayoffInfo = [];
 
-    // Check how many cards are paid and how early
-    const cardPaymentInfo = [];
-
+    // Check Discover
     if (nextDiscover) {
-      if (latestSnapshot.discover_statement === 0 && paymentDates.discover) {
-        const daysEarly = Math.ceil((nextDiscover.date - paymentDates.discover) / (1000 * 60 * 60 * 24));
-        cardPaymentInfo.push({ card: 'discover', daysEarly });
-      }
+      const maraBalance = latestSnapshot.mara || 0;
+      const discoverTotal = latestSnapshot.discover_total || 0;
+      const canPayOff = (maraBalance - discoverTotal) >= 150;
+      cardPayoffInfo.push({ card: 'Discover (Mara)', canPayOff, balance: maraBalance, cardTotal: discoverTotal, owner: 'Mara' });
     }
 
+    // Check Gold
     if (nextGold) {
-      if (latestSnapshot.gold_statement === 0 && paymentDates.gold) {
-        const daysEarly = Math.ceil((nextGold.date - paymentDates.gold) / (1000 * 60 * 60 * 24));
-        cardPaymentInfo.push({ card: 'gold', daysEarly });
-      }
+      const matBalance = latestSnapshot.mat || 0;
+      const goldTotal = latestSnapshot.gold_total || 0;
+      const canPayOff = (matBalance - goldTotal) >= 150;
+      cardPayoffInfo.push({ card: 'Gold (Mat)', canPayOff, balance: matBalance, cardTotal: goldTotal, owner: 'Mat' });
     }
 
+    // Check Blue - uses LIVE account
     if (nextBlue) {
-      if (latestSnapshot.blue_statement === 0 && paymentDates.blue) {
-        const daysEarly = Math.ceil((nextBlue.date - paymentDates.blue) / (1000 * 60 * 60 * 24));
-        cardPaymentInfo.push({ card: 'blue', daysEarly });
-      }
+      const liveBalance = latestSnapshot.live || 0;
+      const blueTotal = latestSnapshot.blue_total || 0;
+      const canPayOff = (liveBalance - blueTotal) >= 150;
+      cardPayoffInfo.push({ card: 'Blue (LIVE)', canPayOff, balance: liveBalance, cardTotal: blueTotal, owner: 'LIVE' });
     }
 
-    const paidCount = cardPaymentInfo.length;
-    const allPaidOverWeekEarly = cardPaymentInfo.every(info => info.daysEarly >= 7);
-    const allPaidWithinWeek = cardPaymentInfo.every(info => info.daysEarly >= 0);
+    const payableCount = cardPayoffInfo.filter(info => info.canPayOff).length;
 
     let promptScore = 0;
-    if (paidCount === 3 && allPaidOverWeekEarly) {
+    if (payableCount === 3) {
       promptScore = 10;
-    } else if (paidCount === 3 && allPaidWithinWeek) {
+    } else if (payableCount === 2) {
       promptScore = 6;
-    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 7)) {
-      promptScore = 7;
-    } else if (paidCount === 2 && cardPaymentInfo.every(info => info.daysEarly >= 0)) {
-      promptScore = 4;
-    } else if (paidCount === 1 && cardPaymentInfo[0].daysEarly >= 7) {
+    } else if (payableCount === 1) {
       promptScore = 3;
-    } else if (paidCount === 1) {
-      promptScore = 2;
     } else {
       promptScore = 0;
     }
 
     scoreBreakdown.promptPaymentsScore = promptScore;
-    scoreBreakdown.details.promptPayments = paidCount > 0
-      ? `${paidCount} of 3 cards paid off (Avg ${(cardPaymentInfo.reduce((sum, info) => sum + info.daysEarly, 0) / paidCount).toFixed(1)} days early)`
-      : 'No cards have been paid off yet';
+    scoreBreakdown.details.promptPayments = payableCount > 0
+      ? `${payableCount} of 3 cards can be paid off in full while keeping $150 cushion`
+      : 'No cards can be paid off in full while keeping $150 cushion';
 
     const totalScore = Math.round(
       scoreBreakdown.billsScore +
@@ -866,40 +950,119 @@ export default function App() {
     return { score: totalScore, alerts, positives, scoreBreakdown };
   };
 
-  // Generate top 3 suggestions to improve health score
+  // Generate top 3 actionable suggestions to improve health score
   const generateScoreSuggestions = () => {
     if (!latestSnapshot) return [];
 
     const healthData = calculateHealth();
     const suggestions = [];
+    const bills = getUpcomingBills();
 
-    // Suggestion 1: Bills on time (max 40 points)
+    // Get next credit card bills and check payoff ability
+    const nextDiscover = bills.find(b => b.type === 'discover');
+    const nextGold = bills.find(b => b.type === 'gold');
+    const nextBlue = bills.find(b => b.type === 'blue');
+
+    // Suggestion for Credit Card Payoffs (max 10 points)
+    const promptGap = healthData.scoreBreakdown.promptPaymentsMax - healthData.scoreBreakdown.promptPaymentsScore;
+    if (promptGap > 0) {
+      let actionItems = [];
+
+      // Check Discover (Mara)
+      if (nextDiscover) {
+        const maraBalance = latestSnapshot.mara || 0;
+        const discoverTotal = latestSnapshot.discover_total || 0;
+        const afterPayment = maraBalance - discoverTotal;
+        const dueDate = nextDiscover.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        if (afterPayment >= 150) {
+          actionItems.push(`Mara: Pay off Discover ($${discoverTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
+        } else if (discoverTotal > 0) {
+          const shortfall = 150 - afterPayment;
+          actionItems.push(`Mara: Need $${shortfall.toFixed(2)} more to pay off Discover ($${discoverTotal.toFixed(2)}) and keep cushion`);
+        }
+      }
+
+      // Check Gold (Mat)
+      if (nextGold) {
+        const matBalance = latestSnapshot.mat || 0;
+        const goldTotal = latestSnapshot.gold_total || 0;
+        const afterPayment = matBalance - goldTotal;
+        const dueDate = nextGold.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        if (afterPayment >= 150) {
+          actionItems.push(`Mat: Pay off Gold ($${goldTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
+        } else if (goldTotal > 0) {
+          const shortfall = 150 - afterPayment;
+          actionItems.push(`Mat: Need $${shortfall.toFixed(2)} more to pay off Gold ($${goldTotal.toFixed(2)}) and keep cushion`);
+        }
+      }
+
+      // Check Blue (LIVE)
+      if (nextBlue) {
+        const liveBalance = latestSnapshot.live || 0;
+        const blueTotal = latestSnapshot.blue_total || 0;
+        const afterPayment = liveBalance - blueTotal;
+        const dueDate = nextBlue.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        if (afterPayment >= 150) {
+          actionItems.push(`LIVE: Pay off Blue Amex ($${blueTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
+        } else if (blueTotal > 0) {
+          const shortfall = 150 - afterPayment;
+          actionItems.push(`LIVE: Need $${shortfall.toFixed(2)} more to pay off Blue Amex ($${blueTotal.toFixed(2)}) and keep cushion`);
+        }
+      }
+
+      if (actionItems.length > 0) {
+        suggestions.push({
+          category: 'Credit Card Payoffs',
+          currentPoints: healthData.scoreBreakdown.promptPaymentsScore.toFixed(1),
+          maxPoints: healthData.scoreBreakdown.promptPaymentsMax,
+          potentialGain: promptGap.toFixed(1),
+          suggestion: actionItems[0], // Show the first action item as the main suggestion
+          details: actionItems.join(' • ')
+        });
+      }
+    }
+
+    // Suggestion for Bills on time (max 60 points)
     const billsGap = healthData.scoreBreakdown.billsMax - healthData.scoreBreakdown.billsScore;
     if (billsGap > 0) {
+      let actionSuggestion = 'Ensure all upcoming bills can be paid on time';
+
+      // Check if we can pay the upcoming bills
+      if (nextDiscover) {
+        const discoverCheck = calculatePaymentDate('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date);
+        if (!discoverCheck.canPay) {
+          actionSuggestion = `Mara needs $${discoverCheck.shortfall.toFixed(2)} more to pay Discover by ${nextDiscover.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+        }
+      }
+
+      if (nextGold) {
+        const goldCheck = calculatePaymentDate('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date);
+        if (!goldCheck.canPay) {
+          actionSuggestion = `Mat needs $${goldCheck.shortfall.toFixed(2)} more to pay Gold by ${nextGold.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+        }
+      }
+
+      if (nextBlue) {
+        const blueCheck = calculatePaymentDate('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date);
+        if (!blueCheck.canPay) {
+          actionSuggestion = `Need $${blueCheck.shortfall.toFixed(2)} more in LIVE to pay Blue Amex by ${nextBlue.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+        }
+      }
+
       suggestions.push({
         category: 'Bills on Time',
         currentPoints: healthData.scoreBreakdown.billsScore.toFixed(1),
         maxPoints: healthData.scoreBreakdown.billsMax,
         potentialGain: billsGap.toFixed(1),
-        suggestion: 'Ensure all upcoming bills can be paid on time',
+        suggestion: actionSuggestion,
         details: healthData.scoreBreakdown.details.bills
       });
     }
 
-    // Suggestion 2: Prompt Payments (max 25 points)
-    const promptGap = healthData.scoreBreakdown.promptPaymentsMax - healthData.scoreBreakdown.promptPaymentsScore;
-    if (promptGap > 0) {
-      suggestions.push({
-        category: 'Prompt Payments',
-        currentPoints: healthData.scoreBreakdown.promptPaymentsScore.toFixed(1),
-        maxPoints: healthData.scoreBreakdown.promptPaymentsMax,
-        potentialGain: promptGap.toFixed(1),
-        suggestion: 'Pay all credit card statements 7+ days before due date',
-        details: healthData.scoreBreakdown.details.promptPayments
-      });
-    }
-
-    // Suggestion 3: Personal Account Health (max 20 points)
+    // Suggestion for Personal Account Health (max 15 points)
     const personalGap = healthData.scoreBreakdown.personalMax - healthData.scoreBreakdown.personalScore;
     if (personalGap > 0) {
       suggestions.push({
@@ -912,15 +1075,23 @@ export default function App() {
       });
     }
 
-    // Suggestion 4: Kickback Indicator (max 15 points)
+    // Suggestion for Kickback Indicator (max 15 points)
     const kickbackGap = healthData.scoreBreakdown.kickbackMax - healthData.scoreBreakdown.kickbackScore;
     if (kickbackGap > 0) {
+      const kickbackProjection = calculateProjectedKickback();
+      let actionSuggestion = 'Reduce expenses to increase end-of-month kickback';
+
+      if (kickbackProjection && kickbackProjection.potentialKickback < 200) {
+        const needed = 200 - kickbackProjection.potentialKickback;
+        actionSuggestion = `Reduce expenses by $${needed.toFixed(2)} to reach $200 kickback target`;
+      }
+
       suggestions.push({
         category: 'Kickback Indicator',
         currentPoints: healthData.scoreBreakdown.kickbackScore.toFixed(1),
         maxPoints: healthData.scoreBreakdown.kickbackMax,
         potentialGain: kickbackGap.toFixed(1),
-        suggestion: 'Reduce expenses to increase end-of-month kickback to $200+',
+        suggestion: actionSuggestion,
         details: healthData.scoreBreakdown.details.kickback
       });
     }
@@ -1038,7 +1209,7 @@ export default function App() {
       </header>
 
       <nav style={styles.nav}>
-        {['dashboard', 'update', 'reports'].map(view => (
+        {['dashboard', 'update', 'reports', 'settings'].map(view => (
           <button
             key={view}
             onClick={() => setCurrentView(view)}
@@ -1117,7 +1288,7 @@ export default function App() {
                 </div>
                 <div style={styles.detailsSubtext}>{scoreBreakdown.details.kickback || 'N/A'}</div>
                 <div style={styles.detailsRow}>
-                  <span>Prompt Payments:</span>
+                  <span>Total Balance Payoff Ability:</span>
                   <span>{(scoreBreakdown.promptPaymentsScore || 0).toFixed(1)} / {scoreBreakdown.promptPaymentsMax}</span>
                 </div>
                 <div style={styles.detailsSubtext}>{scoreBreakdown.details.promptPayments || 'N/A'}</div>
@@ -1372,13 +1543,16 @@ export default function App() {
                               <span>+ Future deposits (until {matDisp.nextDueDate.toLocaleDateString()}):</span>
                               <span>+${matDisp.futureDeposits.toFixed(2)}</span>
                             </div>
-                            {matDisp.paydaysBeforeDue.map((pd, idx) => (
-                              <div key={idx} style={styles.disposableSubDetail}>
-                                {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
-                                  pd.type === 'mat' ? CONFIG.splits.matPersonalFromMat.toFixed(2) : CONFIG.splits.matPersonalFromMara.toFixed(2)
-                                }
-                              </div>
-                            ))}
+                            {matDisp.paydaysBeforeDue.map((pd, idx) => {
+                              const personalSplits = getPersonalSplits();
+                              return (
+                                <div key={idx} style={styles.disposableSubDetail}>
+                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                    pd.type === 'mat' ? personalSplits.matPersonalFromMat.toFixed(2) : personalSplits.matPersonalFromMara.toFixed(2)
+                                  }
+                                </div>
+                              );
+                            })}
                             <div style={styles.disposableDetailRow}>
                               <span>- Next payment ({matDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
                               <span>-${matDisp.nextPaymentAmount.toFixed(2)}</span>
@@ -1448,13 +1622,16 @@ export default function App() {
                               <span>+ Future deposits (until {maraDisp.nextDueDate.toLocaleDateString()}):</span>
                               <span>+${maraDisp.futureDeposits.toFixed(2)}</span>
                             </div>
-                            {maraDisp.paydaysBeforeDue.map((pd, idx) => (
-                              <div key={idx} style={styles.disposableSubDetail}>
-                                {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
-                                  pd.type === 'mat' ? CONFIG.splits.maraPersonalFromMat.toFixed(2) : CONFIG.splits.maraPersonalFromMara.toFixed(2)
-                                }
-                              </div>
-                            ))}
+                            {maraDisp.paydaysBeforeDue.map((pd, idx) => {
+                              const personalSplits = getPersonalSplits();
+                              return (
+                                <div key={idx} style={styles.disposableSubDetail}>
+                                  {pd.date.toLocaleDateString()} ({pd.type === 'mat' ? 'Mat' : 'Mara'}): +${
+                                    pd.type === 'mat' ? personalSplits.maraPersonalFromMat.toFixed(2) : personalSplits.maraPersonalFromMara.toFixed(2)
+                                  }
+                                </div>
+                              );
+                            })}
                             <div style={styles.disposableDetailRow}>
                               <span>- Next payment ({maraDisp.cardStatement > 0 ? 'statement' : 'next bill'}):</span>
                               <span>-${maraDisp.nextPaymentAmount.toFixed(2)}</span>
@@ -1511,7 +1688,7 @@ export default function App() {
               statement: latestSnapshot.gold_statement,
               total: latestSnapshot.gold_total,
               dueDate: bills.find(b => b.type === 'gold')?.date,
-              dueDay: '25th'
+              dueDay: '15th'
             },
             {
               type: 'blue',
@@ -1521,7 +1698,7 @@ export default function App() {
               statement: latestSnapshot.blue_statement,
               total: latestSnapshot.blue_total,
               dueDate: bills.find(b => b.type === 'blue')?.date,
-              dueDay: '11th'
+              dueDay: '8th'
             },
           ];
 
@@ -1532,20 +1709,41 @@ export default function App() {
                 {cards.map(card => {
                   const accountType = card.account.toLowerCase();
                   const startBalance = latestSnapshot[accountType];
-                  const paymentCalc = card.statement > 0 ? calculatePaymentDate(accountType, startBalance, card.statement, card.dueDate) : null;
+                  const statementPaymentCalc = card.statement > 0 ? calculatePaymentDate(accountType, startBalance, card.statement, card.dueDate) : null;
+                  const totalPaymentCalc = card.total > 0 ? calculatePaymentDate(accountType, startBalance, card.total, card.dueDate) : null;
                   const paidDate = card.statement === 0 ? findPaymentDate(card.type) : null;
                   const daysEarly = paidDate && card.dueDate ? Math.ceil((card.dueDate - paidDate) / (1000 * 60 * 60 * 24)) : null;
-                  const canPayBeforeDue = paymentCalc ? (paymentCalc.canPay && paymentCalc.dateAvailable <= card.dueDate) : false;
+
+                  // Calculate payment ability percentages
+                  const statementAbility = card.statement > 0
+                    ? Math.min(100, Math.max(0, (startBalance / card.statement) * 100))
+                    : 100;
+                  const totalAbility = card.total > 0
+                    ? Math.min(100, Math.max(0, ((startBalance - 150) / card.total) * 100))  // Account for $150 cushion
+                    : 100;
+
+                  // Check if everything is paid off
+                  const fullyPaidOff = card.statement === 0 && card.total === 0;
+                  const statementPaidOnly = card.statement === 0 && card.total > 0;
 
                   return (
-                    <div key={card.type} style={styles.creditCardDisplay}>
+                    <div key={card.type} style={{
+                      ...styles.creditCardDisplay,
+                      ...(fullyPaidOff ? styles.creditCardFullyPaid : {})
+                    }}>
                       <div style={styles.creditCardHeader}>
                         <span style={{ ...styles.balanceLabel, color: card.color }}>{card.name}</span>
                         <span style={styles.creditCardDue}>Due: {card.dueDay}</span>
                       </div>
 
                       {/* Payment Status */}
-                      {card.statement === 0 ? (
+                      {fullyPaidOff ? (
+                        <div style={styles.creditCardCelebration}>
+                          <div style={styles.celebrationIcon}>🎉</div>
+                          <div style={styles.celebrationText}>PAID OFF!</div>
+                          <div style={styles.celebrationSubtext}>Card is at $0.00</div>
+                        </div>
+                      ) : statementPaidOnly ? (
                         <>
                           <div style={styles.creditCardPaidBadge}>✓ Statement Paid</div>
                           {paidDate && (
@@ -1563,7 +1761,7 @@ export default function App() {
                         </>
                       ) : (
                         <>
-                          {paymentCalc && !paymentCalc.canPay && (
+                          {statementPaymentCalc && !statementPaymentCalc.canPay && (
                             <div style={styles.creditCardInsufficientFunds}>
                               ⚠ Insufficient funds by due date
                             </div>
@@ -1572,24 +1770,69 @@ export default function App() {
                       )}
 
                       {/* Balances */}
-                      <div style={styles.creditCardBalances}>
-                        <div style={styles.creditCardBalanceRow}>
-                          <span style={styles.creditCardBalanceLabel}>Total Balance</span>
-                          <span style={styles.creditCardBalanceValue}>${card.total.toFixed(2)}</span>
+                      {!fullyPaidOff && (
+                        <div style={styles.creditCardBalances}>
+                          <div style={styles.creditCardBalanceRow}>
+                            <span style={styles.creditCardBalanceLabel}>Total Balance</span>
+                            <span style={styles.creditCardBalanceValue}>${card.total.toFixed(2)}</span>
+                          </div>
+                          <div style={styles.creditCardBalanceRow}>
+                            <span style={styles.creditCardBalanceLabel}>Statement</span>
+                            <span style={{
+                              ...styles.creditCardBalanceValue,
+                              color: card.statement === 0 ? '#10b981' : '#f59e0b'
+                            }}>
+                              ${card.statement.toFixed(2)}
+                            </span>
+                          </div>
                         </div>
-                        <div style={styles.creditCardBalanceRow}>
-                          <span style={styles.creditCardBalanceLabel}>Statement</span>
-                          <span style={{
-                            ...styles.creditCardBalanceValue,
-                            color: card.statement === 0 ? '#10b981' : '#f59e0b'
-                          }}>
-                            ${card.statement.toFixed(2)}
-                          </span>
+                      )}
+
+                      {/* Payment Ability Insights */}
+                      {!fullyPaidOff && (
+                        <div style={styles.paymentAbilitySection}>
+                          <div style={styles.abilityTitle}>Payment Ability by Due Date:</div>
+
+                          {/* Statement Payment Ability */}
+                          <div style={styles.abilityRow}>
+                            <span style={styles.abilityLabel}>Statement:</span>
+                            <div style={styles.abilityBarContainer}>
+                              <div style={{
+                                ...styles.abilityBar,
+                                width: `${statementAbility}%`,
+                                backgroundColor: statementAbility >= 100 ? '#10b981' : statementAbility >= 75 ? '#f59e0b' : '#ef4444'
+                              }} />
+                            </div>
+                            <span style={{
+                              ...styles.abilityPercentage,
+                              color: statementAbility >= 100 ? '#10b981' : statementAbility >= 75 ? '#f59e0b' : '#ef4444'
+                            }}>
+                              {statementAbility.toFixed(0)}%
+                            </span>
+                          </div>
+
+                          {/* Total Payment Ability */}
+                          <div style={styles.abilityRow}>
+                            <span style={styles.abilityLabel}>Total:</span>
+                            <div style={styles.abilityBarContainer}>
+                              <div style={{
+                                ...styles.abilityBar,
+                                width: `${totalAbility}%`,
+                                backgroundColor: totalAbility >= 100 ? '#10b981' : totalAbility >= 75 ? '#f59e0b' : '#ef4444'
+                              }} />
+                            </div>
+                            <span style={{
+                              ...styles.abilityPercentage,
+                              color: totalAbility >= 100 ? '#10b981' : totalAbility >= 75 ? '#f59e0b' : '#ef4444'
+                            }}>
+                              {totalAbility.toFixed(0)}%
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                      )}
 
                       {/* Show Details Button (only if statement > 0) */}
-                      {card.statement > 0 && paymentCalc && (
+                      {card.statement > 0 && statementPaymentCalc && (
                         <>
                           <button
                             onClick={() => setExpandedDetails(prev => ({ ...prev, [`card-${card.type}`]: !prev[`card-${card.type}`] }))}
@@ -1599,7 +1842,7 @@ export default function App() {
                           </button>
                           {expandedDetails[`card-${card.type}`] && (
                             <div style={styles.anticipatedDetailsBox}>
-                              {paymentCalc.details}
+                              {statementPaymentCalc.details}
                             </div>
                           )}
                         </>
@@ -1981,6 +2224,241 @@ export default function App() {
           </section>
         </main>
       )}
+
+      {currentView === 'settings' && (
+        <main style={styles.main}>
+          <section style={styles.updateSection}>
+            <h2 style={styles.sectionTitle}>Settings</h2>
+            <p style={styles.updateHint}>Edit your financial configuration</p>
+
+            {message && (
+              <div style={styles.message}>
+                {message}
+              </div>
+            )}
+
+            <div style={styles.settingsContainer}>
+              {/* Income Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>💰 Income</h3>
+                <div style={styles.settingsGrid}>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Mat Pay Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.matPayAmount}
+                      onChange={(e) => setTempConfig({ ...tempConfig, matPayAmount: parseFloat(e.target.value) || 0 })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Mara Pay Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.maraPayAmount}
+                      onChange={(e) => setTempConfig({ ...tempConfig, maraPayAmount: parseFloat(e.target.value) || 0 })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Budget Splits Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>📊 Budget Splits</h3>
+                <div style={styles.settingsGrid}>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Give % (decimal)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.splits.give}
+                      onChange={(e) => setTempConfig({ ...tempConfig, splits: { ...tempConfig.splits, give: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Save % (decimal)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.splits.save}
+                      onChange={(e) => setTempConfig({ ...tempConfig, splits: { ...tempConfig.splits, save: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Mat LIVE Amount ($)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.splits.matLive}
+                      onChange={(e) => setTempConfig({ ...tempConfig, splits: { ...tempConfig.splits, matLive: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Mara LIVE Amount ($)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.splits.maraLive}
+                      onChange={(e) => setTempConfig({ ...tempConfig, splits: { ...tempConfig.splits, maraLive: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Credit Card Due Dates Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>💳 Credit Card Due Dates</h3>
+                <div style={styles.settingsGrid}>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Blue Amex (day of month)</label>
+                    <input
+                      type="number"
+                      value={tempConfig.dueDates.blue}
+                      onChange={(e) => setTempConfig({ ...tempConfig, dueDates: { ...tempConfig.dueDates, blue: parseInt(e.target.value) || 1 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Gold Amex (day of month)</label>
+                    <input
+                      type="number"
+                      value={tempConfig.dueDates.gold}
+                      onChange={(e) => setTempConfig({ ...tempConfig, dueDates: { ...tempConfig.dueDates, gold: parseInt(e.target.value) || 1 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Discover (day of month)</label>
+                    <input
+                      type="number"
+                      value={tempConfig.dueDates.discover}
+                      onChange={(e) => setTempConfig({ ...tempConfig, dueDates: { ...tempConfig.dueDates, discover: parseInt(e.target.value) || 1 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Rent Due Date</label>
+                    <input
+                      type="text"
+                      value={tempConfig.dueDates.rent}
+                      onChange={(e) => setTempConfig({ ...tempConfig, dueDates: { ...tempConfig.dueDates, rent: e.target.value } })}
+                      style={styles.settingsInput}
+                      placeholder="last"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Monthly Bills Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>🏠 Monthly Bills</h3>
+                <div style={styles.settingsGrid}>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Rent</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.rent}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, rent: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Insurance</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.insurance}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, insurance: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Gym</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.gym}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, gym: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Date Nights</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.dateNights}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, dateNights: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Power</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.power}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, power: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Groceries</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.groceries}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, groceries: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Gas</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.monthlyBills.gas}
+                      onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, gas: parseFloat(e.target.value) || 0 } })}
+                      style={styles.settingsInput}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={styles.settingsActions}>
+                <button
+                  onClick={() => {
+                    saveConfig(tempConfig);
+                    setTimeout(() => setMessage(''), 3000);
+                  }}
+                  style={styles.saveButton}
+                >
+                  Save Settings
+                </button>
+                <button
+                  onClick={() => {
+                    setTempConfig(DEFAULT_CONFIG);
+                    saveConfig(DEFAULT_CONFIG);
+                    setTimeout(() => setMessage(''), 3000);
+                  }}
+                  style={styles.resetButton}
+                >
+                  Reset to Defaults
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      )}
     </div>
   );
 }
@@ -2038,7 +2516,9 @@ const styles = {
   navButton: {
     padding: '0.5rem 1rem',
     backgroundColor: 'transparent',
-    border: '1px solid #334155',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: '#334155',
     borderRadius: '0.5rem',
     color: '#94a3b8',
     fontSize: '0.875rem',
@@ -2498,6 +2978,75 @@ const styles = {
     padding: '0.5rem',
     backgroundColor: '#0f172a',
     borderRadius: '0.375rem',
+  },
+  creditCardFullyPaid: {
+    backgroundColor: '#022c22',
+    border: '2px solid #10b981',
+    boxShadow: '0 0 15px rgba(16, 185, 129, 0.3)',
+  },
+  creditCardCelebration: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    padding: '1.5rem 1rem',
+    gap: '0.5rem',
+  },
+  celebrationIcon: {
+    fontSize: '3rem',
+    animation: 'bounce 1s infinite',
+  },
+  celebrationText: {
+    fontSize: '1.25rem',
+    fontWeight: '800',
+    color: '#10b981',
+    letterSpacing: '0.1em',
+  },
+  celebrationSubtext: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+  },
+  paymentAbilitySection: {
+    marginTop: '0.75rem',
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    borderRadius: '0.375rem',
+  },
+  abilityTitle: {
+    fontSize: '0.625rem',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '0.5rem',
+  },
+  abilityRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    marginBottom: '0.5rem',
+  },
+  abilityLabel: {
+    fontSize: '0.75rem',
+    color: '#cbd5e1',
+    minWidth: '70px',
+  },
+  abilityBarContainer: {
+    flex: 1,
+    height: '12px',
+    backgroundColor: '#1e293b',
+    borderRadius: '6px',
+    overflow: 'hidden',
+    border: '1px solid #334155',
+  },
+  abilityBar: {
+    height: '100%',
+    transition: 'width 0.3s ease',
+    borderRadius: '6px',
+  },
+  abilityPercentage: {
+    fontSize: '0.75rem',
+    fontWeight: '700',
+    minWidth: '45px',
+    textAlign: 'right',
   },
   kickbackProjectionSection: {
     marginBottom: '1.5rem',
@@ -3054,11 +3603,83 @@ const styles = {
     fontSize: '0.875rem',
     fontWeight: '500',
   },
+  settingsContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1.5rem',
+    marginTop: '1rem',
+  },
+  settingsSection: {
+    backgroundColor: '#1e293b',
+    padding: '1.5rem',
+    borderRadius: '0.5rem',
+  },
+  settingsSectionTitle: {
+    fontSize: '1rem',
+    fontWeight: '600',
+    marginBottom: '1rem',
+    color: '#f1f5f9',
+  },
+  settingsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '1rem',
+  },
+  settingsInputGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+  },
+  settingsLabel: {
+    fontSize: '0.75rem',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  settingsInput: {
+    padding: '0.75rem',
+    backgroundColor: '#0f172a',
+    border: '1px solid #334155',
+    borderRadius: '0.375rem',
+    color: '#f1f5f9',
+    fontSize: '0.875rem',
+    fontFamily: 'inherit',
+  },
+  settingsActions: {
+    display: 'flex',
+    gap: '1rem',
+    justifyContent: 'center',
+    marginTop: '1rem',
+  },
+  saveButton: {
+    padding: '0.75rem 2rem',
+    backgroundColor: '#3b82f6',
+    border: 'none',
+    borderRadius: '0.5rem',
+    color: '#fff',
+    fontSize: '1rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  resetButton: {
+    padding: '0.75rem 2rem',
+    backgroundColor: '#ef4444',
+    border: 'none',
+    borderRadius: '0.5rem',
+    color: '#fff',
+    fontSize: '1rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
 };
 
 // Add keyframes for spinner animation and global styles
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
   * {
     margin: 0;
     padding: 0;
@@ -3070,6 +3691,9 @@ styleSheet.textContent = `
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
 `;
 document.head.appendChild(styleSheet);
