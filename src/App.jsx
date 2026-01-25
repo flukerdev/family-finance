@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import PlaidLink from './components/PlaidLink';
 
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -65,6 +66,8 @@ export default function App() {
   });
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null);
   const [tempConfig, setTempConfig] = useState(config);
+  const [syncing, setSyncing] = useState(false);
+  const [connectedAccounts, setConnectedAccounts] = useState([]);
 
   // Calculate personal splits based on config
   const getPersonalSplits = () => {
@@ -158,10 +161,60 @@ export default function App() {
     }
   };
 
+  // Fetch connected Plaid accounts
+  const fetchConnectedAccounts = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('plaid_items')
+        .select('*');
+
+      if (error) {
+        console.error('Error fetching connected accounts:', error);
+      } else {
+        setConnectedAccounts(data || []);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  };
+
+  // Sync balances from Plaid
+  const syncBalances = async () => {
+    setSyncing(true);
+    setMessage('');
+    try {
+      const response = await fetch('http://localhost:3001/api/sync_balances', {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        setMessage('✅ Balances synced successfully!');
+        await fetchSnapshots(); // Refresh the dashboard
+      } else {
+        setMessage('❌ ' + (data.message || 'Failed to sync balances'));
+      }
+    } catch (error) {
+      console.error('Error syncing balances:', error);
+      setMessage('❌ Error syncing balances. Make sure the server is running.');
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  };
+
+  // Handle successful Plaid Link
+  const handlePlaidSuccess = (metadata) => {
+    setMessage('✅ Bank account connected successfully!');
+    fetchConnectedAccounts();
+    setTimeout(() => setMessage(''), 3000);
+  };
+
   // Fetch latest snapshot and config on load
   useEffect(() => {
     fetchSnapshots();
     fetchConfig();
+    fetchConnectedAccounts();
   }, []);
 
   // Sync tempConfig with config when switching to settings
@@ -1225,6 +1278,22 @@ export default function App() {
 
       {currentView === 'dashboard' && (
         <main style={styles.main}>
+          {/* Plaid Sync Button */}
+          {connectedAccounts.length > 0 && (
+            <div style={styles.syncButtonContainer}>
+              <button
+                onClick={syncBalances}
+                disabled={syncing}
+                style={{
+                  ...styles.syncButton,
+                  opacity: syncing ? 0.7 : 1
+                }}
+              >
+                {syncing ? '⏳ Syncing...' : '🔄 Sync Bank Accounts'}
+              </button>
+            </div>
+          )}
+
           {/* Health Score */}
           <section style={styles.scoreSection}>
             <div style={styles.scoreCircle}>
@@ -2429,6 +2498,39 @@ export default function App() {
                       onChange={(e) => setTempConfig({ ...tempConfig, monthlyBills: { ...tempConfig.monthlyBills, gas: parseFloat(e.target.value) || 0 } })}
                       style={styles.settingsInput}
                     />
+                  </div>
+                </div>
+              </div>
+
+              {/* Plaid Bank Connection Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>🏦 Bank Account Integration</h3>
+                <p style={styles.updateHint}>Connect your bank accounts to automatically sync balances</p>
+
+                <div style={{ marginTop: '1rem' }}>
+                  <PlaidLink onSuccess={handlePlaidSuccess} />
+
+                  {connectedAccounts.length > 0 && (
+                    <div style={{ marginTop: '1rem' }}>
+                      <h4 style={{ ...styles.settingsLabel, marginBottom: '0.5rem' }}>Connected Accounts:</h4>
+                      {connectedAccounts.map((account) => (
+                        <div key={account.id} style={styles.connectedAccountItem}>
+                          <span>🏦 {account.institution_name || 'Bank Account'}</span>
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                            Connected {new Date(account.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', fontSize: '0.875rem', color: '#cbd5e1' }}>
+                    <strong>💡 How it works:</strong>
+                    <ul style={{ marginTop: '0.5rem', marginLeft: '1.25rem', color: '#94a3b8' }}>
+                      <li>Click "Connect Bank Account" to link your accounts via Plaid</li>
+                      <li>Use the "Sync Bank Accounts" button on the Dashboard to update balances</li>
+                      <li>Account mapping currently uses automatic name matching</li>
+                    </ul>
                   </div>
                 </div>
               </div>
@@ -3672,6 +3774,33 @@ const styles = {
     fontWeight: '600',
     cursor: 'pointer',
     transition: 'all 0.2s',
+  },
+  syncButtonContainer: {
+    display: 'flex',
+    justifyContent: 'center',
+    marginBottom: '1.5rem',
+  },
+  syncButton: {
+    padding: '0.75rem 2rem',
+    backgroundColor: '#8b5cf6',
+    border: 'none',
+    borderRadius: '0.75rem',
+    color: '#fff',
+    fontSize: '1rem',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    boxShadow: '0 4px 6px rgba(139, 92, 246, 0.3)',
+  },
+  connectedAccountItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '0.75rem',
+    backgroundColor: '#1e293b',
+    borderRadius: '0.5rem',
+    marginBottom: '0.5rem',
+    color: '#e2e8f0',
   },
 };
 
