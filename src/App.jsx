@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import PlaidLink from './components/PlaidLink';
+import AccountMappingUI from './components/AccountMappingUI';
 
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -2512,7 +2513,7 @@ export default function App() {
 
                   {connectedAccounts.length > 0 && (
                     <div style={{ marginTop: '1rem' }}>
-                      <h4 style={{ ...styles.settingsLabel, marginBottom: '0.5rem' }}>Connected Accounts:</h4>
+                      <h4 style={{ ...styles.settingsLabel, marginBottom: '0.5rem' }}>Connected Institutions:</h4>
                       {connectedAccounts.map((account) => (
                         <div key={account.id} style={styles.connectedAccountItem}>
                           <span>🏦 {account.institution_name || 'Bank Account'}</span>
@@ -2524,12 +2525,22 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Account Mapping UI */}
+                  {connectedAccounts.length > 0 && (
+                    <AccountMappingUI
+                      onMappingSaved={() => {
+                        setMessage('✅ Account mappings saved! Click "Sync Bank Accounts" on the Dashboard to update balances.');
+                        setTimeout(() => setMessage(''), 5000);
+                      }}
+                    />
+                  )}
+
                   <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', fontSize: '0.875rem', color: '#cbd5e1' }}>
                     <strong>💡 How it works:</strong>
                     <ul style={{ marginTop: '0.5rem', marginLeft: '1.25rem', color: '#94a3b8' }}>
-                      <li>Click "Connect Bank Account" to link your accounts via Plaid</li>
+                      <li>Click "Connect Bank Account" to link your banks via Plaid</li>
+                      <li>Use the Account Mapping section above to assign each account to a budget bucket</li>
                       <li>Use the "Sync Bank Accounts" button on the Dashboard to update balances</li>
-                      <li>Account mapping currently uses automatic name matching</li>
                     </ul>
                   </div>
                 </div>

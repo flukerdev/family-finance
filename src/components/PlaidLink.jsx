@@ -31,7 +31,10 @@ const PlaidLink = ({ onSuccess }) => {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ public_token: publicToken }),
+          body: JSON.stringify({
+            public_token: publicToken,
+            institution: metadata.institution // Pass institution name
+          }),
         });
         const data = await response.json();
         if (data.success) {
