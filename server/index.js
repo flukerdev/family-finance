@@ -43,19 +43,33 @@ const supabase = createClient(
 // Create link token for Plaid Link
 app.post('/api/create_link_token', async (req, res) => {
   try {
-    const response = await plaidClient.linkTokenCreate({
+    // Use 'transactions' which is commonly available
+    // 'auth' and 'balance' may have restrictions
+    const products = ['transactions'];
+
+    console.log(`Creating link token with products: ${products.join(', ')} (env: ${process.env.PLAID_ENV})`);
+
+    const linkTokenConfig = {
       user: {
         client_user_id: 'family-finance-user',
       },
       client_name: 'Family Finance',
-      products: ['transactions'],
+      products: products,
       country_codes: ['US'],
       language: 'en',
-    });
+    };
+
+    // Note: No redirect_uri needed for Limited Production (non-OAuth banks only)
+    // OAuth banks require HTTPS redirect URIs and full production access
+
+    const response = await plaidClient.linkTokenCreate(linkTokenConfig);
     res.json(response.data);
   } catch (error) {
-    console.error('Error creating link token:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error creating link token:', error.response?.data || error.message);
+    res.status(500).json({
+      error: error.response?.data?.error_message || error.message,
+      code: error.response?.data?.error_code
+    });
   }
 });
 
