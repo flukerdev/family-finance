@@ -99,6 +99,7 @@ export default function App() {
       const loadedConfig = {
         matPayAmount: parseFloat(dbConfig.mat_pay_amount),
         maraPayAmount: parseFloat(dbConfig.mara_pay_amount),
+        cushion: parseFloat(dbConfig.cushion) || 150,
         splits: {
           give: parseFloat(dbConfig.split_give),
           save: parseFloat(dbConfig.split_save),
@@ -132,6 +133,7 @@ export default function App() {
     const configData = {
       mat_pay_amount: newConfig.matPayAmount,
       mara_pay_amount: newConfig.maraPayAmount,
+      cushion: newConfig.cushion,
       split_give: newConfig.splits.give,
       split_save: newConfig.splits.save,
       split_mat_live: newConfig.splits.matLive,
@@ -2380,6 +2382,26 @@ export default function App() {
                       onChange={(e) => setTempConfig({ ...tempConfig, splits: { ...tempConfig.splits, maraLive: parseFloat(e.target.value) || 0 } })}
                       style={styles.settingsInput}
                     />
+                  </div>
+                </div>
+              </div>
+
+              {/* Safety Buffer Section */}
+              <div style={styles.settingsSection}>
+                <h3 style={styles.settingsSectionTitle}>🛡️ Safety Buffer</h3>
+                <div style={styles.settingsGrid}>
+                  <div style={styles.settingsInputGroup}>
+                    <label style={styles.settingsLabel}>Cushion Amount ($)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={tempConfig.cushion}
+                      onChange={(e) => setTempConfig({ ...tempConfig, cushion: parseFloat(e.target.value) || 0 })}
+                      style={styles.settingsInput}
+                    />
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                      Minimum balance to keep in accounts after paying bills
+                    </span>
                   </div>
                 </div>
               </div>
