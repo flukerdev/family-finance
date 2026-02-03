@@ -73,17 +73,17 @@ This section describes exactly how Mat and Mara's money flows. Every feature in 
 
 ### Income
 - **Mat's net biweekly pay:** $2,018.55
-- **Mara's net biweekly pay:** $1,320.88
+- **Mara's net biweekly pay:** $1,302.06
 - Paychecks land on **opposite weeks** — one paycheck arrives every week
-- Combined monthly take-home (approx): ~$6,678.86
+- Combined monthly take-home (approx): ~$6,641.22
 
 ### The 5 Accounts (Checking + Savings)
 Money flows from each paycheck in this exact order:
 
 | Step | Account | Mat's Paycheck | Mara's Paycheck | Purpose |
 |------|---------|---------------|-----------------|---------|
-| 1 | **GIVE** | 20% ($403.71) | 20% ($264.18) | Tithing (50%) + Generosity (50%) |
-| 2 | **SAVE** | 20% ($403.71) | 20% ($264.18) | Savings, future investments |
+| 1 | **GIVE** | 20% ($403.71) | 20% ($260.41) | Tithing (50%) + Generosity (50%) |
+| 2 | **SAVE** | 20% ($403.71) | 20% ($260.41) | Savings, future investments |
 | 3 | **LIVE** | $984.00 | $656.00 | Shared household expenses |
 | 4 | **MAT** | $113.57 | $62.62 | Mat's personal spending |
 | 5 | **MARA** | $113.57 | $62.62 | Mara's personal spending |
@@ -96,7 +96,7 @@ Money flows from each paycheck in this exact order:
 |------|----------|-------------|-----------|
 | **Blue Cash Preferred (Amex)** | All LIVE expenses (groceries, gas, gym, dates, power) | 8th of each month | LIVE account |
 | **Gold Delta (Amex)** | Mat's personal expenses | 15th of each month | MAT account |
-| **Discover** | Mara's personal expenses | 4th of each month | MARA account |
+| **Discover** | Mara's personal expenses | 2nd of each month | MARA account |
 
 ### LIVE Account Monthly Expenses
 | Line Item | Amount | Notes |
@@ -109,9 +109,11 @@ Money flows from each paycheck in this exact order:
 | Date nights | $200/month | On Blue Amex |
 | Power bill | $70–$225/month | Fluctuates heavily (poor insulation) |
 
-- LIVE account starts each month with ~$150 safety buffer
+- LIVE account starts each month with ~$150 safety buffer (configurable in Settings)
 - Rent is paid directly from LIVE checking (Zelle), NOT on the credit card
 - All other LIVE expenses go on the Blue Cash Preferred Amex
+
+**Note:** Most financial values (pay amounts, LIVE contributions, monthly bills, cushion) are configurable in the Settings tab and stored in Supabase.
 
 ### End-of-Month Kickback
 - Any surplus remaining in LIVE at month-end gets split 50/50 into Mat and Mara accounts
@@ -134,7 +136,7 @@ Money flows from each paycheck in this exact order:
 ### Health Score (1–100)
 - Composite score based on: current day in the month, all 5 account balances, all 3 CC balances
 - Should surface alerts like:
-  - "Mara won't have enough to cover her Discover payment on the 4th"
+  - "Mara won't have enough to cover her Discover payment on the 2nd"
   - "You're $X over the LIVE budget this month"
   - "You're on pace for $200 kickback — that's $100 each!"
 

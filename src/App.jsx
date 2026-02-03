@@ -12,6 +12,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const DEFAULT_CONFIG = {
   matPayAmount: 2018.55,
   maraPayAmount: 1302.06,
+  cushion: 150, // Safety buffer for accounts
   splits: {
     give: 0.20,
     save: 0.20,
@@ -492,7 +493,7 @@ export default function App() {
     if (!latestSnapshot) return null;
 
     const accountBalance = latestSnapshot[person.toLowerCase()];
-    const cushion = 150;
+    const cushion = config.cushion;
 
     // Determine which card this person pays
     let cardType, cardStatement, cardTotal, nextDueDate;
@@ -531,8 +532,9 @@ export default function App() {
       }
     }
 
-    // Next payment amount (if statement is paid, next payment is total - statement)
-    const nextPaymentAmount = cardStatement > 0 ? cardStatement : (cardTotal - cardStatement);
+    // Next payment amount is always the statement balance
+    // If statement is $0, we owe $0 right now (new charges appear on next statement)
+    const nextPaymentAmount = cardStatement;
 
     // Disposable income calculation
     const disposableIncome = accountBalance - cushion + futureDeposits - nextPaymentAmount;
@@ -565,11 +567,11 @@ export default function App() {
         : (pd.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara);
       calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
     });
-    calc += `- Next payment (${dispData.cardStatement > 0 ? 'statement' : 'next bill'}): -$${dispData.nextPaymentAmount.toFixed(2)}\n`;
+    calc += `- Next payment (statement): -$${dispData.nextPaymentAmount.toFixed(2)}\n`;
     if (dispData.cardStatement > 0) {
       calc += `  Statement balance due on ${dispData.nextDueDate.toLocaleDateString()}\n`;
     } else {
-      calc += `  Statement paid. Next payment = Total ($${dispData.cardTotal.toFixed(2)}) - Statement ($${dispData.cardStatement.toFixed(2)})\n`;
+      calc += `  Statement is $0 — no payment due this cycle (Total building: $${dispData.cardTotal.toFixed(2)})\n`;
     }
     calc += `\n= Disposable Income: $${dispData.disposableIncome.toFixed(2)}`;
     return calc;
@@ -684,8 +686,8 @@ export default function App() {
 
     projectedLive -= projectedRemainingExpenses;
 
-    // Kickback is anything above the $150 safety buffer
-    const potentialKickback = Math.max(0, projectedLive - 150);
+    // Kickback is anything above the safety buffer
+    const potentialKickback = Math.max(0, projectedLive - config.cushion);
     const kickbackEach = potentialKickback / 2;
 
     return {
@@ -699,7 +701,7 @@ export default function App() {
         rent: rentBill ? config.monthlyBills.rent : 0,
         blueAmex: blueTotalBalance,
         projectedRemainingExpenses,
-        safetyBuffer: 150,
+        safetyBuffer: config.cushion,
         daysRemaining,
         monthProgress: (monthProgress * 100).toFixed(1),
       }
@@ -714,11 +716,11 @@ export default function App() {
       positives: [],
       scoreBreakdown: {
         billsScore: 0,
-        billsMax: 60,
+        billsMax: 70,
         personalScore: 0,
-        personalMax: 15,
+        personalMax: 10,
         kickbackScore: 0,
-        kickbackMax: 15,
+        kickbackMax: 10,
         promptPaymentsScore: 0,
         promptPaymentsMax: 10,
         details: {
@@ -734,11 +736,11 @@ export default function App() {
     const positives = [];
     const scoreBreakdown = {
       billsScore: 0,
-      billsMax: 60,
+      billsMax: 70,
       personalScore: 0,
-      personalMax: 15,
+      personalMax: 10,
       kickbackScore: 0,
-      kickbackMax: 15,
+      kickbackMax: 10,
       promptPaymentsScore: 0,
       promptPaymentsMax: 10,
       details: {}
@@ -887,23 +889,23 @@ export default function App() {
       }
     }
 
-    // SCORING: 60 points for bills
+    // SCORING: 70 points for bills
     const billsCovered = billChecks.filter(b => b.canPay).length;
     const totalBills = billChecks.length;
-    scoreBreakdown.billsScore = totalBills > 0 ? (billsCovered / totalBills) * 60 : 60;
+    scoreBreakdown.billsScore = totalBills > 0 ? (billsCovered / totalBills) * 70 : 70;
     scoreBreakdown.details.bills = `${billsCovered} of ${totalBills} upcoming bills can be paid on time`;
 
-    // SCORING: 15 points for personal account health (based on disposable income)
+    // SCORING: 10 points for personal account health (based on disposable income)
     let personalPoints = 0;
     const matDisposable = calculateDisposableIncome('mat');
     const maraDisposable = calculateDisposableIncome('mara');
 
-    // Mat's disposable income scoring (max 7.5 points)
+    // Mat's disposable income scoring (max 5 points)
     if (matDisposable && matDisposable.disposableIncome > 0) {
-      if (matDisposable.disposableIncome >= 200) personalPoints += 7.5;
-      else if (matDisposable.disposableIncome >= 100) personalPoints += 6;
-      else if (matDisposable.disposableIncome >= 50) personalPoints += 4;
-      else personalPoints += 2;
+      if (matDisposable.disposableIncome >= 200) personalPoints += 5;
+      else if (matDisposable.disposableIncome >= 100) personalPoints += 4;
+      else if (matDisposable.disposableIncome >= 50) personalPoints += 2.5;
+      else personalPoints += 1.5;
     } else if (matDisposable && matDisposable.disposableIncome < 0) {
       personalPoints += 0;
       alerts.push({
@@ -914,12 +916,12 @@ export default function App() {
       });
     }
 
-    // Mara's disposable income scoring (max 7.5 points)
+    // Mara's disposable income scoring (max 5 points)
     if (maraDisposable && maraDisposable.disposableIncome > 0) {
-      if (maraDisposable.disposableIncome >= 200) personalPoints += 7.5;
-      else if (maraDisposable.disposableIncome >= 100) personalPoints += 6;
-      else if (maraDisposable.disposableIncome >= 50) personalPoints += 4;
-      else personalPoints += 2;
+      if (maraDisposable.disposableIncome >= 200) personalPoints += 5;
+      else if (maraDisposable.disposableIncome >= 100) personalPoints += 4;
+      else if (maraDisposable.disposableIncome >= 50) personalPoints += 2.5;
+      else personalPoints += 1.5;
     } else if (maraDisposable && maraDisposable.disposableIncome < 0) {
       personalPoints += 0;
       alerts.push({
@@ -933,13 +935,13 @@ export default function App() {
     scoreBreakdown.personalScore = personalPoints;
     scoreBreakdown.details.personal = `Mat disposable: $${matDisposable ? matDisposable.disposableIncome.toFixed(2) : 'N/A'}, Mara disposable: $${maraDisposable ? maraDisposable.disposableIncome.toFixed(2) : 'N/A'}`;
 
-    // SCORING: 15 points for Kickback Indicator
+    // SCORING: 10 points for Kickback Indicator
     const kickbackProjection = calculateProjectedKickback();
     if (kickbackProjection) {
       const kickbackAmount = kickbackProjection.potentialKickback;
-      if (kickbackAmount >= 200) scoreBreakdown.kickbackScore = 15;
-      else if (kickbackAmount >= 100) scoreBreakdown.kickbackScore = 10;
-      else if (kickbackAmount > 0) scoreBreakdown.kickbackScore = 5;
+      if (kickbackAmount >= 200) scoreBreakdown.kickbackScore = 10;
+      else if (kickbackAmount >= 100) scoreBreakdown.kickbackScore = 7;
+      else if (kickbackAmount > 0) scoreBreakdown.kickbackScore = 3;
       else scoreBreakdown.kickbackScore = 0;
 
       scoreBreakdown.details.kickback = `Projected kickback: $${kickbackAmount.toFixed(2)} (Target: $200+)`;
@@ -949,14 +951,14 @@ export default function App() {
     }
 
     // SCORING: 10 points for Credit Card Payoff Ability
-    // Check if we can pay off total balance by due date while keeping $150 cushion
+    // Check if we can pay off total balance by due date while keeping cushion
     const cardPayoffInfo = [];
 
     // Check Discover
     if (nextDiscover) {
       const maraBalance = latestSnapshot.mara || 0;
       const discoverTotal = latestSnapshot.discover_total || 0;
-      const canPayOff = (maraBalance - discoverTotal) >= 150;
+      const canPayOff = (maraBalance - discoverTotal) >= config.cushion;
       cardPayoffInfo.push({ card: 'Discover (Mara)', canPayOff, balance: maraBalance, cardTotal: discoverTotal, owner: 'Mara' });
     }
 
@@ -964,7 +966,7 @@ export default function App() {
     if (nextGold) {
       const matBalance = latestSnapshot.mat || 0;
       const goldTotal = latestSnapshot.gold_total || 0;
-      const canPayOff = (matBalance - goldTotal) >= 150;
+      const canPayOff = (matBalance - goldTotal) >= config.cushion;
       cardPayoffInfo.push({ card: 'Gold (Mat)', canPayOff, balance: matBalance, cardTotal: goldTotal, owner: 'Mat' });
     }
 
@@ -972,7 +974,7 @@ export default function App() {
     if (nextBlue) {
       const liveBalance = latestSnapshot.live || 0;
       const blueTotal = latestSnapshot.blue_total || 0;
-      const canPayOff = (liveBalance - blueTotal) >= 150;
+      const canPayOff = (liveBalance - blueTotal) >= config.cushion;
       cardPayoffInfo.push({ card: 'Blue (LIVE)', canPayOff, balance: liveBalance, cardTotal: blueTotal, owner: 'LIVE' });
     }
 
@@ -991,8 +993,8 @@ export default function App() {
 
     scoreBreakdown.promptPaymentsScore = promptScore;
     scoreBreakdown.details.promptPayments = payableCount > 0
-      ? `${payableCount} of 3 cards can be paid off in full while keeping $150 cushion`
-      : 'No cards can be paid off in full while keeping $150 cushion';
+      ? `${payableCount} of 3 cards can be paid off in full while keeping $${config.cushion} cushion`
+      : `No cards can be paid off in full while keeping $${config.cushion} cushion`;
 
     const totalScore = Math.round(
       scoreBreakdown.billsScore +
@@ -1029,10 +1031,10 @@ export default function App() {
         const afterPayment = maraBalance - discoverTotal;
         const dueDate = nextDiscover.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-        if (afterPayment >= 150) {
+        if (afterPayment >= config.cushion) {
           actionItems.push(`Mara: Pay off Discover ($${discoverTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
         } else if (discoverTotal > 0) {
-          const shortfall = 150 - afterPayment;
+          const shortfall = config.cushion - afterPayment;
           actionItems.push(`Mara: Need $${shortfall.toFixed(2)} more to pay off Discover ($${discoverTotal.toFixed(2)}) and keep cushion`);
         }
       }
@@ -1044,10 +1046,10 @@ export default function App() {
         const afterPayment = matBalance - goldTotal;
         const dueDate = nextGold.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-        if (afterPayment >= 150) {
+        if (afterPayment >= config.cushion) {
           actionItems.push(`Mat: Pay off Gold ($${goldTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
         } else if (goldTotal > 0) {
-          const shortfall = 150 - afterPayment;
+          const shortfall = config.cushion - afterPayment;
           actionItems.push(`Mat: Need $${shortfall.toFixed(2)} more to pay off Gold ($${goldTotal.toFixed(2)}) and keep cushion`);
         }
       }
@@ -1059,10 +1061,10 @@ export default function App() {
         const afterPayment = liveBalance - blueTotal;
         const dueDate = nextBlue.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-        if (afterPayment >= 150) {
+        if (afterPayment >= config.cushion) {
           actionItems.push(`LIVE: Pay off Blue Amex ($${blueTotal.toFixed(2)}) by ${dueDate} - you'll have $${afterPayment.toFixed(2)} left`);
         } else if (blueTotal > 0) {
-          const shortfall = 150 - afterPayment;
+          const shortfall = config.cushion - afterPayment;
           actionItems.push(`LIVE: Need $${shortfall.toFixed(2)} more to pay off Blue Amex ($${blueTotal.toFixed(2)}) and keep cushion`);
         }
       }
@@ -1789,7 +1791,7 @@ export default function App() {
                     ? Math.min(100, Math.max(0, (startBalance / card.statement) * 100))
                     : 100;
                   const totalAbility = card.total > 0
-                    ? Math.min(100, Math.max(0, ((startBalance - 150) / card.total) * 100))  // Account for $150 cushion
+                    ? Math.min(100, Math.max(0, ((startBalance - config.cushion) / card.total) * 100))  // Account for cushion
                     : 100;
 
                   // Check if everything is paid off
