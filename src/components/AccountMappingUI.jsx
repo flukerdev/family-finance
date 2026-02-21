@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 // Available app account types for mapping
 const ACCOUNT_BUCKETS = [
   { value: '', label: '-- Select Bucket --', group: 'none' },
@@ -13,7 +15,7 @@ const ACCOUNT_BUCKETS = [
   { value: 'discover_total', label: 'Discover (Credit Card)', group: 'credit' },
 ];
 
-const AccountMappingUI = ({ onMappingSaved }) => {
+const AccountMappingUI = ({ onMappingSaved, authFetch }) => {
   const [accounts, setAccounts] = useState([]);
   const [mappings, setMappings] = useState({});
   const [loading, setLoading] = useState(true);
@@ -28,7 +30,7 @@ const AccountMappingUI = ({ onMappingSaved }) => {
   const fetchAccountsWithMappings = async () => {
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:3001/api/accounts/with-mappings');
+      const response = await authFetch(`${API_URL}/api/accounts/with-mappings`);
       const data = await response.json();
 
       setAccounts(data.accounts || []);
@@ -77,7 +79,7 @@ const AccountMappingUI = ({ onMappingSaved }) => {
         };
       });
 
-      const response = await fetch('http://localhost:3001/api/mappings', {
+      const response = await authFetch(`${API_URL}/api/mappings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mappings: mappingsArray }),

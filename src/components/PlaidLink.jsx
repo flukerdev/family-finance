@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
 
-const PlaidLinkButton = ({ linkToken, onSuccess }) => {
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+const PlaidLinkButton = ({ linkToken, onSuccess, authFetch }) => {
   const onPlaidSuccess = useCallback(async (publicToken, metadata) => {
     try {
-      const response = await fetch('http://localhost:3001/api/exchange_public_token', {
+      const response = await authFetch(`${API_URL}/api/exchange_public_token`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -21,7 +23,7 @@ const PlaidLinkButton = ({ linkToken, onSuccess }) => {
     } catch (error) {
       console.error('Error exchanging token:', error);
     }
-  }, [onSuccess]);
+  }, [onSuccess, authFetch]);
 
   const config = {
     token: linkToken,
@@ -52,7 +54,7 @@ const PlaidLinkButton = ({ linkToken, onSuccess }) => {
   );
 };
 
-const PlaidLink = ({ onSuccess }) => {
+const PlaidLink = ({ onSuccess, authFetch }) => {
   const [linkToken, setLinkToken] = useState(null);
   const [error, setError] = useState(null);
 
@@ -61,7 +63,7 @@ const PlaidLink = ({ onSuccess }) => {
 
     const fetchLinkToken = async () => {
       try {
-        const response = await fetch('http://localhost:3001/api/create_link_token', {
+        const response = await authFetch(`${API_URL}/api/create_link_token`, {
           method: 'POST',
         });
 
@@ -87,7 +89,7 @@ const PlaidLink = ({ onSuccess }) => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [authFetch]);
 
   if (error) {
     return (
@@ -120,7 +122,7 @@ const PlaidLink = ({ onSuccess }) => {
     );
   }
 
-  return <PlaidLinkButton linkToken={linkToken} onSuccess={onSuccess} />;
+  return <PlaidLinkButton linkToken={linkToken} onSuccess={onSuccess} authFetch={authFetch} />;
 };
 
 export default PlaidLink;

@@ -10,12 +10,14 @@ This is Mat's personal project. He is learning web development — **always expl
 - **Backend:** Express server in `server/` directory (runs on port 3001)
 - **Database:** Supabase (hosted Postgres)
 - **Bank Integration:** Plaid API (sandbox mode currently, production access approved)
-- **Styling:** Inline styles (no CSS framework)
+- **Styling:** Inline styles via theme system (no CSS framework)
 - **Language:** JavaScript (JSX), not TypeScript
+- **Charts:** Recharts (ComposedChart, Line, Area, XAxis, YAxis, etc.)
 
 ## Key Commands
 - `npm run dev` — Start Vite frontend (port 5176)
 - `npm run server` — Start Express backend (port 3001)
+- `npx vite build` — Production build (verify no errors)
 - IMPORTANT: **Both must be running simultaneously** for Plaid features to work
 - IMPORTANT: **Server MUST be restarted after any .env changes** — it reads .env on startup only
 
@@ -27,16 +29,23 @@ This is Mat's personal project. He is learning web development — **always expl
 ├── package.json
 ├── vite.config.js
 ├── create-plaid-table.sql ← Supabase schema for Plaid tables
+├── MATH_AUDIT.md          ← Calculation audit results
+├── STATUS.md              ← Development status tracker
 ├── server/
 │   └── index.js           ← Express backend (all Plaid API endpoints)
 ├── src/
-│   ├── App.jsx            ← Main app: tabs (Dashboard, Settings), state management
+│   ├── App.jsx            ← Main app (~4850 lines): all views, state, calculations
 │   ├── main.jsx           ← React entry point
-│   ├── supabaseClient.js  ← Supabase connection config
 │   └── components/
 │       ├── PlaidLink.jsx        ← Bank connection flow via Plaid Link
-│       └── AccountMappingUI.jsx ← Maps Plaid accounts → app buckets
+│       ├── AccountMappingUI.jsx ← Maps Plaid accounts → app buckets
+│       ├── BalanceChart.jsx     ← Single-account balance history (Area chart)
+│       ├── CreditCardChart.jsx  ← CC total/statement vs account balance (Area + Lines + overage shading)
+│       ├── NetPositionChart.jsx ← Net worth over time (checking minus CC balances)
+│       ├── SafeToSpendChart.jsx ← Personal account projection to next due date (monotone + daily interpolation)
+│       └── BudgetHealthChart.jsx← LIVE account projection to end of month (daily burn rate)
 └── .claude/
+    ├── agents/            ← Subagent definitions (frontend, backend, supabase, lead)
     └── commands/          ← Custom slash commands
 ```
 
@@ -54,7 +63,7 @@ PORT=3001
 
 ## Git Workflow
 - `main` branch = production/stable code
-- Feature branches for experiments (current: `plaid-integration`)
+- Feature branches for experiments
 - Always confirm which branch we're on before making changes
 - Commit frequently with descriptive messages
 - Do not push to main without Mat's approval
@@ -62,8 +71,62 @@ PORT=3001
 ## Code Style
 - ES modules (`import`/`export`), NOT CommonJS (`require`)
 - React functional components with hooks
-- Inline styles (style objects in JSX)
+- Inline styles via theme tokens (see Theme System below)
 - Descriptive variable names over clever short ones
+
+---
+
+## THEME SYSTEM (Ink Wash)
+
+All UI colors use semantic theme tokens — never hardcode hex values.
+
+```js
+const theme = themes[themeMode]; // 'dark' or 'light'
+// Use: theme.bg, theme.cardBg, theme.text, theme.textMuted, theme.textDimmed
+// Status: theme.success, theme.danger, theme.warning
+// Accounts: theme.give, theme.save, theme.live, theme.mat, theme.mara
+// Derived: theme.dangerBg, theme.successBg, theme.dangerLight, theme.successLight
+```
+
+The `createStyles(theme, fonts)` function generates all shared style objects from theme tokens.
+
+---
+
+## APP.JSX ARCHITECTURE (~4850 lines)
+
+### Key Sections (approximate line ranges)
+| Section | Lines | Purpose |
+|---------|-------|---------|
+| Theme system + styles | 1–1100 | Theme tokens, `createStyles()`, all shared style objects |
+| State declarations | 1600–1670 | `useState` hooks for all app state |
+| Financial functions | 1700–2900 | `getPersonalSplits()`, `getUpcomingPaydays()`, `getUpcomingBills()`, `calculatePaymentDate()`, `calculateDisposableIncome()`, `generateDisposableCalculation()`, `generateBillPaymentCalculation()`, `calculateBudgetHealth()`, `calculateHealth()`, `generateScoreSuggestions()` |
+| Data fetching | 2950–3060 | `fetchConfig()`, `fetchSnapshots()`, Supabase queries |
+| Chart data (useMemo) | 3060–3150 | `chartData` — transforms snapshots into chart-ready arrays |
+| Dashboard view | 3500–4150 | Health score carousel, donut breakdown, suggestions, alerts/positives, budget health card, TBB cards |
+| Accounts view | 4150–4250 | Account list + chart drill-down |
+| Calendar view | 4250–4440 | Monthly calendar with bill markers |
+| Popup system | 4440–4800 | `activePopup` state drives slide-in panels for: `safeToSpend`, `positiveDetail`, `budgetHealth`, `tbbDetail`, `alertDetail` |
+| Bottom nav | 4800–4850 | Home → Accounts → Calendar |
+
+### Key Patterns
+
+**Popup system:** `setActivePopup({ type: 'safeToSpend', person, data, calculation })` → renders in the popup section at bottom of JSX. Each type has its own render block.
+
+**disposableData pattern:** Objects passed to `SafeToSpendChart` with shape:
+```js
+{ accountBalance, nextPaymentAmount, nextDueDate, cushion, paydaysBeforeDue, depositAmounts }
+```
+`depositAmounts` is an array of `{ date, type, amount }` with exact per-payday splits.
+
+**Carousel pattern:** Horizontal swipe containers using `transform: translateX(-${slide * 100}%)` with touch handlers and dot indicators.
+
+### Key Financial Functions
+- `getPersonalSplits()` — Computes exact per-paycheck splits for Mat/Mara personal accounts
+- `calculateDisposableIncome(person)` — Returns disposableData object for mat/mara
+- `calculateBudgetHealth()` — Returns projected EOM LIVE balance, surplus/deficit, health score
+- `calculateHealth()` — Master function: computes score (0-100), alerts[], positives[], scoreBreakdown
+- `generateBillPaymentCalculation()` — Formatted calc string: Balance → Deposits → Projected → Payment → Remaining → Funds
+- `generateDisposableCalculation()` — Same order for safe-to-spend calculations
 
 ---
 
@@ -109,11 +172,11 @@ Money flows from each paycheck in this exact order:
 | Date nights | $200/month | On Blue Amex |
 | Power bill | $70–$225/month | Fluctuates heavily (poor insulation) |
 
-- LIVE account starts each month with ~$150 safety buffer (configurable in Settings)
+- LIVE account starts each month with ~$150 safety buffer (configurable in Settings as `cushion`)
 - Rent is paid directly from LIVE checking (Zelle), NOT on the credit card
 - All other LIVE expenses go on the Blue Cash Preferred Amex
 
-**Note:** Most financial values (pay amounts, LIVE contributions, monthly bills, cushion) are configurable in the Settings tab and stored in Supabase.
+**Note:** Most financial values (pay amounts, LIVE contributions, monthly bills, cushion) are configurable in the Settings tab and stored in Supabase `app_config` table.
 
 ### End-of-Month Kickback
 - Any surplus remaining in LIVE at month-end gets split 50/50 into Mat and Mara accounts
@@ -133,16 +196,16 @@ Money flows from each paycheck in this exact order:
 
 ## FEATURE GOALS (What we're building toward)
 
-### Health Score (1–100)
-- Composite score based on: current day in the month, all 5 account balances, all 3 CC balances
-- Should surface alerts like:
-  - "Mara won't have enough to cover her Discover payment on the 2nd"
-  - "You're $X over the LIVE budget this month"
-  - "You're on pace for $200 kickback — that's $100 each!"
+### Health Score (1–100) — IMPLEMENTED
+- 4 scoring categories: Bills on Time (70pts), Safe to Spend (10pts), Budget Health (10pts), Total Balance Bonus (10pts)
+- Interactive donut chart with hover/tap segment details
+- Score suggestions carousel with improvement recommendations
+- Alerts system for low budget health, negative safe-to-spend, bill shortfalls
+- Positives system ("Looking Good") for on-track bills with projection charts
 
-### Bill Timeline
-- Visual timeline showing upcoming bills and due dates
-- Color-coded by financial health (green = covered, yellow = tight, red = short)
+### Bill Timeline — IMPLEMENTED (Calendar tab)
+- Monthly calendar view with bill markers and payday indicators
+- Color-coded by financial health
 
 ### Analytics
 - Line item breakdown: which LIVE categories (groceries, gas, dates, etc.) went over/under
@@ -179,6 +242,10 @@ Money flows from each paycheck in this exact order:
 
 4. **Plaid sandbox vs production** — Currently using sandbox. User has production access. When switching, update both `PLAID_ENV` and `PLAID_SECRET` in .env, then restart server.
 
+5. **App.jsx is large (~4850 lines)** — Use Grep to find specific functions/sections rather than reading the whole file. The "Key Sections" table above gives approximate line ranges.
+
+6. **Vite port** — `vite.config.js` has no port set, so Vite defaults to 5173. CLAUDE.md says 5176 but either may be in use depending on port availability.
+
 ---
 
 ## SUPABASE TABLES
@@ -198,6 +265,24 @@ Maps each Plaid account to an app bucket.
 - `is_credit_card` (BOOLEAN)
 - `is_statement_balance` (BOOLEAN)
 
+### `balance_snapshots`
+Point-in-time balance snapshots for all accounts. Up to 30 fetched, ordered by `created_at DESC`.
+- `give`, `save`, `live`, `mat`, `mara` (NUMERIC) — checking account balances
+- `blue_total`, `blue_statement` (NUMERIC) — Blue Amex balances
+- `gold_total`, `gold_statement` (NUMERIC) — Gold Amex balances
+- `discover_total`, `discover_statement` (NUMERIC) — Discover balances
+- `created_at` (TIMESTAMPTZ)
+
+### `app_config`
+Stores all configurable financial values (pay amounts, splits, bills, cushion, due dates).
+- `mat_pay_amount`, `mara_pay_amount` (NUMERIC)
+- `split_give`, `split_save` (NUMERIC) — percentage as decimal (0.2 = 20%)
+- `mat_live`, `mara_live` (NUMERIC) — LIVE contributions
+- `cushion` (NUMERIC) — safety buffer amount
+- Monthly bills: `rent`, `groceries`, `gas`, `date_nights`, `power`, `gym`, `insurance`
+- Due dates: `blue_due`, `gold_due`, `discover_due`
+- `created_at` (TIMESTAMPTZ)
+
 ### App Bucket Values for `app_account_type`:
 - `give` — Give checking account
 - `save` — Save checking account
@@ -216,3 +301,4 @@ Maps each Plaid account to an app bucket.
 3. Check server console output for credential loading status
 4. Check browser console (F12) for network errors
 5. If .env was changed, restart the Express server
+6. Use `npx vite build` to check for compile errors without running the app
