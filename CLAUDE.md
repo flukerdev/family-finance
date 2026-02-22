@@ -9,7 +9,8 @@ This is Mat's personal project. He is learning web development — **always expl
 - **Frontend:** React 18 + Vite (runs on port 5176)
 - **Backend:** Express server in `server/` directory (runs on port 3001)
 - **Database:** Supabase (hosted Postgres)
-- **Bank Integration:** Plaid API (sandbox mode currently, production access approved)
+- **Bank Integration:** Plaid API (sandbox mode currently, production access pending security questionnaire)
+- **Security:** helmet (HTTP headers), express-rate-limit, CORS whitelist
 - **Styling:** Inline styles via theme system (no CSS framework)
 - **Language:** JavaScript (JSX), not TypeScript
 - **Charts:** Recharts (ComposedChart, Line, Area, XAxis, YAxis, etc.)
@@ -28,13 +29,16 @@ This is Mat's personal project. He is learning web development — **always expl
 ├── .env                   ← Plaid + Supabase credentials (never commit)
 ├── package.json
 ├── vite.config.js
+├── vercel.json            ← SPA routing config (rewrites all paths to index.html)
 ├── create-plaid-table.sql ← Supabase schema for Plaid tables
+├── add-user-auth.sql      ← Adds user_id columns + RLS to Plaid tables
+├── create-user-consents-table.sql ← Consent tracking table schema
 ├── MATH_AUDIT.md          ← Calculation audit results
 ├── STATUS.md              ← Development status tracker
 ├── server/
-│   └── index.js           ← Express backend (all Plaid API endpoints)
+│   └── index.js           ← Express backend (Plaid API, auth, consent, account mgmt)
 ├── src/
-│   ├── App.jsx            ← Main app (~4850 lines): all views, state, calculations
+│   ├── App.jsx            ← Main app (~5300 lines): all views, state, calculations
 │   ├── main.jsx           ← React entry point
 │   └── components/
 │       ├── PlaidLink.jsx        ← Bank connection flow via Plaid Link
@@ -44,19 +48,37 @@ This is Mat's personal project. He is learning web development — **always expl
 │       ├── NetPositionChart.jsx ← Net worth over time (checking minus CC balances)
 │       ├── SafeToSpendChart.jsx ← Personal account projection to next due date (monotone + daily interpolation)
 │       └── BudgetHealthChart.jsx← LIVE account projection to end of month (daily burn rate)
+├── security/              ← Security & compliance documentation
+│   ├── PRIVACY_POLICY.md
+│   ├── INFORMATION_SECURITY_POLICY.md
+│   ├── DATA_RETENTION_POLICY.md
+│   ├── ACCESS_REVIEW_POLICY.md
+│   ├── DEPROVISIONING_POLICY.md
+│   ├── EOL_MONITORING_POLICY.md
+│   ├── VULNERABILITY_SCANNING_POLICY.md
+│   ├── ZERO_TRUST_POLICY.md
+│   └── PLAID_SECURITY_CHECKLIST.md
 └── .claude/
     ├── agents/            ← Subagent definitions (frontend, backend, supabase, lead)
     └── commands/          ← Custom slash commands
 ```
 
+## Deployment
+- **Hosting:** Vercel (auto-deploys from GitHub main branch)
+- **Production URL:** https://family-finance-rouge.vercel.app
+- **Public privacy policy:** https://family-finance-rouge.vercel.app/privacy (no login required)
+- **SPA routing:** `vercel.json` rewrites all paths to `index.html` so React handles routing
+
 ## Environment Variables (.env in project root)
 ```
 VITE_SUPABASE_URL=<supabase-url>
 VITE_SUPABASE_ANON_KEY=<supabase-anon-key>
+VITE_API_URL=<production-api-url>  # defaults to http://localhost:3001 if not set
 PLAID_CLIENT_ID=<plaid-client-id>
 PLAID_SECRET=<plaid-secret>
 PLAID_ENV=sandbox
 PORT=3001
+ALLOWED_ORIGINS=<extra-cors-origins>  # optional, comma-separated URLs
 ```
 - The server uses explicit path resolution to load .env: `dotenv.config({ path: path.resolve(__dirname, '../.env') })`
 - Debug logging on startup shows masked credential values — if you see "NOT SET", the .env is not loading
@@ -92,21 +114,26 @@ The `createStyles(theme, fonts)` function generates all shared style objects fro
 
 ---
 
-## APP.JSX ARCHITECTURE (~4850 lines)
+## APP.JSX ARCHITECTURE (~5300 lines)
 
-### Key Sections (approximate line ranges)
-| Section | Lines | Purpose |
-|---------|-------|---------|
+### Key Sections (approximate line ranges — use Grep to find exact positions)
+| Section | ~Lines | Purpose |
+|---------|--------|---------|
 | Theme system + styles | 1–1100 | Theme tokens, `createStyles()`, all shared style objects |
 | State declarations | 1600–1670 | `useState` hooks for all app state |
-| Financial functions | 1700–2900 | `getPersonalSplits()`, `getUpcomingPaydays()`, `getUpcomingBills()`, `calculatePaymentDate()`, `calculateDisposableIncome()`, `generateDisposableCalculation()`, `generateBillPaymentCalculation()`, `calculateBudgetHealth()`, `calculateHealth()`, `generateScoreSuggestions()` |
-| Data fetching | 2950–3060 | `fetchConfig()`, `fetchSnapshots()`, Supabase queries |
-| Chart data (useMemo) | 3060–3150 | `chartData` — transforms snapshots into chart-ready arrays |
-| Dashboard view | 3500–4150 | Health score carousel, donut breakdown, suggestions, alerts/positives, budget health card, TBB cards |
-| Accounts view | 4150–4250 | Account list + chart drill-down |
-| Calendar view | 4250–4440 | Monthly calendar with bill markers |
-| Popup system | 4440–4800 | `activePopup` state drives slide-in panels for: `safeToSpend`, `positiveDetail`, `budgetHealth`, `tbbDetail`, `alertDetail` |
-| Bottom nav | 4800–4850 | Home → Accounts → Calendar |
+| Auth functions (OTP) | 1670–1810 | signup, login, logout, sendEmailOtp, verifyEmailOtp |
+| Financial functions | 1810–2900 | getPersonalSplits, calculateDisposableIncome, calculateHealth, etc. |
+| Consent functions | 2040–2095 | grantPlaidConsent, recordSignupConsent |
+| Sync & Plaid | 2097–2130 | syncBalances, handlePlaidSuccess |
+| Data fetching | 2130–3060 | fetchConfig, fetchSnapshots, fetchConnectedAccounts |
+| Chart data (useMemo) | 3060–3150 | transforms snapshots into chart-ready arrays |
+| Public routes | 3482–3590 | `/privacy` page (renders before auth gate, no login required) |
+| Auth gate + login UI | 3590–3800 | Login/signup form, OTP verification screen |
+| Dashboard view | 3800–4400 | Health score carousel, donut, suggestions, alerts, budget health |
+| Accounts view | 4400–4500 | Account list + chart drill-down |
+| Calendar view | 4500–4700 | Monthly calendar with bill markers |
+| Popup system | 4700–5100 | Slide-in panels for safeToSpend, positiveDetail, budgetHealth, etc. |
+| Bottom nav | 5100–5150 | Home → Accounts → Calendar |
 
 ### Key Patterns
 
@@ -240,9 +267,9 @@ Money flows from each paycheck in this exact order:
    rm -rf node_modules package-lock.json && npm install
    ```
 
-4. **Plaid sandbox vs production** — Currently using sandbox. User has production access. When switching, update both `PLAID_ENV` and `PLAID_SECRET` in .env, then restart server.
+4. **Plaid sandbox limit reached** — Sandbox API calls are exhausted. Production access pending Plaid security questionnaire completion. When switching to production, update both `PLAID_ENV` and `PLAID_SECRET` in .env, then restart server.
 
-5. **App.jsx is large (~4850 lines)** — Use Grep to find specific functions/sections rather than reading the whole file. The "Key Sections" table above gives approximate line ranges.
+5. **App.jsx is large (~5300 lines)** — Use Grep to find specific functions/sections rather than reading the whole file. The "Key Sections" table above gives approximate line ranges.
 
 6. **Vite port** — `vite.config.js` has no port set, so Vite defaults to 5173. CLAUDE.md says 5176 but either may be in use depending on port availability.
 
@@ -255,6 +282,7 @@ Stores Plaid access tokens for connected bank/card institutions.
 - `item_id` (TEXT, unique)
 - `access_token` (TEXT)
 - `institution_name` (TEXT)
+- `user_id` (UUID, references auth.users) — added by add-user-auth.sql
 - `last_synced` (TIMESTAMPTZ)
 
 ### `account_mappings`
@@ -283,6 +311,15 @@ Stores all configurable financial values (pay amounts, splits, bills, cushion, d
 - Due dates: `blue_due`, `gold_due`, `discover_due`
 - `created_at` (TIMESTAMPTZ)
 
+### `user_consents`
+Tracks user consent for privacy policy, Plaid data access, and terms of service.
+- `id` (UUID, primary key)
+- `user_id` (UUID, references auth.users)
+- `consent_type` (TEXT) — 'privacy_policy', 'plaid_data_access', 'terms_of_service'
+- `policy_version` (TEXT) — '1.0', '1.1', etc.
+- `granted_at` (TIMESTAMPTZ)
+- `revoked_at` (TIMESTAMPTZ, nullable)
+
 ### App Bucket Values for `app_account_type`:
 - `give` — Give checking account
 - `save` — Save checking account
@@ -295,10 +332,23 @@ Stores all configurable financial values (pay amounts, splits, bills, cushion, d
 
 ---
 
+## SERVER SECURITY (server/index.js)
+
+- **helmet** — Sets HTTP security headers (HSTS, X-Content-Type-Options, X-Frame-Options, CSP, etc.)
+- **CORS whitelist** — Only allows requests from `https://family-finance-rouge.vercel.app` and `localhost`. Extra origins via `ALLOWED_ORIGINS` env var.
+- **Rate limiting** — General: 100 req/15min. Sensitive endpoints: 10 req/15min (`/api/create_link_token`, `/api/exchange_public_token`, `/api/account`).
+- **JWT auth** — `requireAuth` middleware on all `/api` routes verifies Supabase JWT tokens.
+- **Consent endpoints** — `GET /api/consent?type=<type>` and `POST /api/consent` for tracking user consent.
+- **Account deletion** — `DELETE /api/account` revokes all Plaid tokens, deletes all user data, deletes auth account.
+
+## PUBLIC ROUTES (no login required)
+
+- `/privacy` — Renders the full privacy policy. Checked via `window.location.pathname` before the auth gate in App.jsx. Required by Plaid for compliance.
+
 ## WHEN DEBUGGING
 1. Always check which branch you're on first (`git branch`)
-2. Check if both servers are running (Vite on 5176, Express on 3001)
+2. Check if both servers are running (Vite on 5173, Express on 3001)
 3. Check server console output for credential loading status
-4. Check browser console (F12) for network errors
+4. Check browser console (F12) for network errors — CORS errors may indicate the origin isn't whitelisted
 5. If .env was changed, restart the Express server
 6. Use `npx vite build` to check for compile errors without running the app
