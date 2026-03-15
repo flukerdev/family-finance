@@ -32,7 +32,7 @@ PLAID_ENV=sandbox
 Run this in your Supabase SQL Editor:
 
 ```sql
--- Copy and paste the contents of create-plaid-table.sql
+-- Copy and paste the contents of sql/create-plaid-table.sql
 ```
 
 Or upload the file directly to Supabase.
@@ -127,7 +127,7 @@ See [Plaid Sandbox Guide](https://plaid.com/docs/sandbox/test-credentials/) for 
 ### Accounts connected but balances not syncing
 - Check `server/index.js` account mapping logic
 - Add `console.log(allAccounts)` to see account names
-- Verify `create-plaid-table.sql` was run in Supabase
+- Verify `sql/create-plaid-table.sql` was run in Supabase
 
 ### CORS errors
 - Make sure both servers are running

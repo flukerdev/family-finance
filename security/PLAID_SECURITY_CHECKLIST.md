@@ -96,7 +96,7 @@
 
 **Plaid questionnaire answer:** "Yes — We enforce 2FA using SMS-based or Email-based push OTP"
 
-**Strategy:** SMS OTP as the primary method with email OTP as fallback. Verification happens at two points: (1) during account signup to verify identity, and (2) before sensitive actions like connecting Plaid Link or deleting an account. Day-to-day app usage (viewing balances, budgets) does NOT require re-verification — the user stays logged in via their session.
+**Strategy:** Email OTP is enforced at account signup and before account deletion. Connecting financial accounts via Plaid Link is gated behind explicit data access consent (not OTP) — Plaid Link itself provides institution-level authentication with the user's bank MFA. Day-to-day app usage (viewing balances, budgets) does NOT require re-verification — the user stays logged in via their session.
 
 ### Tasks
 
@@ -150,27 +150,18 @@
     ```
   - Display a "Use email instead" link on the SMS verification screen
 
-- ✅ **Build the OTP verification UI component** *(single input field with resend cooldown timer, built into App.jsx auth gate — shows after signup and before Plaid Link)*
+- ✅ **Build the OTP verification UI component** *(single input field with resend cooldown timer, built into App.jsx auth gate — shows after signup and before account deletion)*
 
-- ✅ **Gate Plaid Link behind OTP verification** *(consent gate → OTP gate → Plaid Link in Settings; plaidOtpVerified state tracks fresh verification)*
-  - Before rendering the Plaid Link component, check if the user has a verified phone number
-  - If their phone is verified and they have an active session, allow access to Plaid Link
-  - If they're attempting to connect a new institution, require a fresh OTP verification:
-    ```javascript
-    // Before showing Plaid Link, trigger a new SMS OTP challenge
-    const { data, error } = await supabase.auth.signInWithOtp({
-      phone: user.phone,
-    });
-    // Show OTP input screen
-    // Only render Plaid Link after successful verification
-    ```
-  - This ensures that even if someone gets access to an unlocked phone, they can't connect new bank accounts without the OTP code
+- ✅ **Gate Plaid Link behind data access consent** *(consent gate → Plaid Link in Settings; user must explicitly agree to data access before connecting accounts)*
+  - Before rendering the Plaid Link component, check if the user has granted data access consent
+  - Plaid Link itself provides institution-level authentication (user logs in with bank credentials + bank MFA)
+  - OTP at Plaid Link was removed — user already verified identity at signup, and three layers of verification (app OTP + Plaid MFA + bank MFA) was excessive
 
 - ✅ **Gate account deletion behind OTP verification** *(confirmation dialog → email OTP → deletion in Settings Danger Zone)*
 
 - ⬜ **Take screenshots of OTP implementation for Plaid submission**
   - Screenshot the signup flow showing phone number collection + SMS code entry
-  - Screenshot the Plaid Link gate showing OTP required before connecting a bank
+  - Screenshot the data access consent gate before Plaid Link
   - Screenshot the email fallback option
 
 ---
@@ -302,7 +293,7 @@
 
 ### Tasks
 
-- ✅ **Add a consent screen before Plaid Link** *(consent gate in Settings → Connected Banks; explains data accessed, usage, disconnect option; records consent via POST /api/consent)*
+- ✅ **Add a consent screen before Plaid Link** *(consent gate in Settings → Connected Accounts; explains data accessed, usage, disconnect option; records consent via POST /api/consent)*
 
 - ✅ **Add consent during account signup** *(privacy/TOS checkbox on signup form; consent recorded via POST /api/consent after email OTP verification)*
 
@@ -365,7 +356,7 @@ This order aligns with the Phase 1-8 deployment plan. Phase 1 (Auth Foundation) 
 6. ✅ **Build reusable OTP verification component** (Q4) — *email OTP built into App.jsx*
 7. ⬜ **Implement SMS verification at signup** (Q4) — *waiting on Twilio*
 8. ✅ **Build email OTP fallback** (Q4) — *implemented as primary method*
-9. ✅ **Gate Plaid Link behind OTP verification** (Q4) — *consent → OTP → Plaid Link*
+9. ✅ **Gate Plaid Link behind data access consent** (Q4) — *consent gate → Plaid Link (OTP removed, bank MFA covers auth)*
 10. ✅ **Gate account deletion behind OTP verification** (Q4)
 11. ✅ **Set up Dependabot + npm audit** (Q8) — *.github/dependabot.yml created*
 
@@ -421,7 +412,7 @@ Before submitting to Plaid, verify:
 - [ ] Twilio is configured in Supabase for SMS delivery
 - [ ] Signup flow collects and verifies phone number via SMS OTP
 - [ ] Email OTP fallback works when user clicks "Use email instead"
-- [ ] OTP verification is required before Plaid Link renders
+- [ ] Data access consent is required before Plaid Link renders
 - [ ] OTP verification is required before account deletion
 - [ ] GitHub 2FA uses authenticator app (NOT SMS only)
 - [ ] Supabase account (not just project) has 2FA enabled

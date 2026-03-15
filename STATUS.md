@@ -1,29 +1,34 @@
 # Flip Development Status
 
-**Last Updated:** February 21, 2026
+**Last Updated:** March 13, 2026
 
 ---
 
 ## Current State
 
-All core features implemented. Plaid security questionnaire submitted. Awaiting production access.
+All core web features implemented. Plaid production access is LIVE. Email signup and verification working. Now executing the MVP v2 roadmap (see PLAN.md) — building toward an iPhone app via Expo/React Native for friends-and-family launch.
 
-## Plaid Compliance Status
+## Current Roadmap Phase
 
-| Remediation | Status |
-|-------------|--------|
-| MFA on consumer app (TOTP or biometric) | Pending — email OTP implemented, needs upgrade |
-| MFA on internal systems | Complete |
-| EOL software monitoring | Complete (policy documented) |
-| Vulnerability scanning | Complete (Dependabot + npm audit + policy) |
-| Periodic access reviews | Complete (policy documented) |
-| Automated de-provisioning | Complete (policy + account deletion implemented) |
-| Zero trust architecture | Complete (policy + existing implementation) |
+**Phase 1: Transaction Sync & Storage (Backend)** — ✅ COMPLETE
 
-**Deadline:** August 22, 2026
+See PLAN.md for the full 9-phase roadmap.
+
+## Plaid Status
+
+- **Production access:** LIVE ✅
+- **Email signup/verification:** Working ✅
+- **Security attestations:** 6/7 complete
+- **Remaining:** MFA upgrade (email OTP → TOTP or biometric) — deadline August 22, 2026
 
 ## Recently Completed
 
+- **Flexible account system (Sub-Phases A-D):** Restructured from hardcoded 5 checking + 3 credit cards to a flexible system supporting 0-N accounts. New `credit_cards` table, JSONB `buckets`/`cards` columns on `balance_snapshots`, new mapping modes (direct/primary/credit_card), dynamic credit card loop in all financial functions. AccountMappingUI redesigned for flexible mapping. All functions (calculateHealth, calculateDisposableIncome, calculateBudgetHealth, chart data, calendar, card projections) now iterate dynamically. Dual-write for backward compat. Migration SQL: `sql/flexible-accounts-migration.sql`. New endpoints: `GET/POST /api/credit-cards`.
+- **Test mode system:** `?testmode=true` on localhost activates sandbox Plaid (free), skips OTP, adds data reset button. Server uses dual Plaid clients (`req.plaidClient` pattern). New endpoint: `POST /api/test-reset`.
+- **Onboarding flow (Phase A):** 10-step first-time user wizard (Onboarding.jsx) — welcome slides, privacy, name collection, Plaid connect, account mapping, sync, done
+- **Name parameterization:** All hardcoded "Mat"/"Mara" strings replaced with configurable `person_1_name`/`person_2_name` from app_config (~25 locations in App.jsx + chart components)
+- **RLS security fix:** Fixed balance_snapshots table leaking data across users (removed wide-open `USING (true)` policies)
+- **DB schema:** Added `onboarding_complete`, `person_1_name`, `person_2_name`, `is_joint_budget` columns to app_config
 - Security hardening: helmet headers, CORS restriction, rate limiting
 - Public privacy policy route at /privacy
 - Vercel SPA routing (vercel.json)
@@ -34,17 +39,32 @@ All core features implemented. Plaid security questionnaire submitted. Awaiting 
 - Math audit corrections
 - Chart components (Balance, CreditCard, NetPosition, SafeToSpend, BudgetHealth)
 - npm vulnerability patches (axios, qs)
+- MVP roadmap v2 finalized (PLAN.md rewritten)
+- Transaction schema created (Prompt 1.1): `transactions` + `sync_cursors` tables
+- Codebase cleanup: SQL files moved to `/sql/`, deleted `nul` artifact, updated all references
+- Transaction sync endpoint (Prompt 1.2): `POST /api/sync_transactions` with cursor-based Plaid sync
+- Plaid UX fixes (post-1.2): removed OTP gate, auto-sync after mapping, "Bank"→"Account" rename, relative sync timestamps, Plaid-managed cards disable manual entry, removed manual sync button, security docs updated
+- Transaction read endpoint (Prompt 1.3): `GET /api/transactions` with account_type/date/pagination filters
 
-## Blocked
+## Next Up (Phase 2: Transaction Display + Onboarding + Manual Import)
 
-- Plaid production access — pending security questionnaire completion
-- Plaid sandbox limit reached — cannot test sync until production access granted
+### Phase 1 Completed ✅
+1. ~~Create `transactions` and `sync_cursors` Supabase tables~~ ✅ (Prompt 1.1)
+2. ~~Add `POST /api/sync_transactions` endpoint~~ ✅ (Prompt 1.2 — cursor-based sync, 4-hour throttle, upsert)
+3. ~~Fix Plaid connection/mapping/sync UX~~ ✅ (auto-sync, OTP removal, terminology, card balance handling)
+4. ~~Add `GET /api/transactions` endpoint~~ ✅ (Prompt 1.3 — paginated, filterable, 330 transactions verified)
 
-## Next Up
+### Phase 2 Deliverables
+- Transaction list view in the frontend (filterable, paginated)
+- First-time user onboarding flow (Welcome → Connect → Map → Sync → Done)
+- Manual account entry option (Plaid or manual per account type)
+- See PLAN.md for Phase 2 prompts (2.1, 2.2, 2.3)
 
-1. Implement robust MFA (TOTP or WebAuthn biometric) for consumer app
-2. Complete Plaid production migration once access granted
-3. Analytics feature (line item breakdown for LIVE categories)
+## Prerequisites (In Parallel)
+
+- [ ] Enroll in Apple Developer Program ($99/year)
+- [ ] Set up Mac development environment (clone repo, install Xcode, Expo CLI)
+- [ ] Create Expo account at expo.dev
 
 ---
 
@@ -53,3 +73,5 @@ All core features implemented. Plaid security questionnaire submitted. Awaiting 
 - Production URL: https://family-finance-rouge.vercel.app
 - Privacy policy: https://family-finance-rouge.vercel.app/privacy
 - Security docs in /security/ directory
+- Full roadmap in PLAN.md (9 phases, ~168-216 hrs)
+- Phase 5 (UI/UX Design System & Branding) added March 11, 2026 — design-first before Expo build

@@ -32,7 +32,7 @@ Know this before planning ANY task:
 ### Key Systems
 - **Health Score (0-100):** 4 categories — Bills on Time (70pts), Safe to Spend (10pts), Budget Health (10pts), Total Balance Bonus (10pts). Computed by `calculateHealth()` in App.jsx.
 - **Popup system:** `activePopup` state with types: `safeToSpend`, `positiveDetail`, `budgetHealth`, `tbbDetail`, `alertDetail`. Each opens a slide-in panel.
-- **Theme system (Ink Wash):** All UI colors via semantic tokens. Dark/light modes. Never hardcode hex values.
+- **Theme system (Ink Wash → Phase 5 redesign):** All UI colors via semantic tokens. Dark/light modes. Never hardcode hex values. Phase 5 will replace Ink Wash with a finalized design system (new palette, typography, animations via Motion library). After Phase 5, no user-controlled theme customization — only light/dark toggle.
 - **Chart components:** 5 standalone components in `src/components/` — BalanceChart, CreditCardChart, NetPositionChart, SafeToSpendChart, BudgetHealthChart. All receive `theme` prop.
 
 ### File Sizes

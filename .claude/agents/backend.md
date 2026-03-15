@@ -65,6 +65,38 @@ Explain **key concepts only**. Mat is learning development.
 - ❌ Don't explain every line
 - ❌ Don't explain basic Express syntax
 
+## Plaid Client Pattern (IMPORTANT)
+
+All Plaid API calls MUST use `req.plaidClient` (not the global `plaidClient`). The server has two Plaid clients:
+- `plaidClient` — production (real banks, costs money)
+- `plaidClientSandbox` — sandbox (free, test data)
+
+The `resolveTestMode` middleware sets `req.plaidClient` to the correct one based on the `X-Test-Mode` header and localhost origin check. Always use `await req.plaidClient.someMethod(...)`.
+
+## Transaction Sync Pattern (cursor-based)
+
+When working on transaction-related endpoints, follow the pattern in `POST /api/sync_transactions`:
+- Use Plaid's `transactionsSync` (cursor-based, not paginated)
+- Store cursor in `sync_cursors` table: `{ user_id, item_id, cursor }`
+- Handle three arrays from Plaid: `added`, `modified`, `removed`
+- Upsert added/modified: `.upsert(rows, { onConflict: 'user_id,plaid_transaction_id' })`
+- Delete removed: `.delete().in('plaid_transaction_id', ids)`
+- Stringify `category` and `personal_finance_category` to JSON before storage
+- Implement throttle by checking `sync_cursors.updated_at` (currently 4-hour window)
+- Support `?force=true` query param to bypass throttle (used after first mapping save)
+- Loop while `has_more` is true (Plaid paginates at 500 per page)
+
+## Transaction Read Pattern (filtering + pagination)
+
+When building read endpoints for Supabase data, follow the pattern in `GET /api/transactions`:
+- Use `select('*', { count: 'exact' })` to get total count for pagination
+- Chain `.eq()`, `.gte()`, `.lte()` conditionally based on query params
+- Use `.range(offset, offset + limit - 1)` for pagination (Supabase range is inclusive)
+- Validate query params early (return 400 for invalid values)
+- Clamp limit (max 200) and offset (min 0) to prevent abuse
+- Valid `app_account_type` values: `give`, `save`, `live`, `mat`, `mara`, `blue_total`, `gold_total`, `discover_total`, `unmapped`
+- Return shape: `{ transactions, total, limit, offset }`
+
 ## When You Find Problems
 
 **Messy code nearby:** Clean it up, but tell Mat:

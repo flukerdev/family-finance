@@ -57,7 +57,8 @@ Phishing-resistant MFA methods (such as authenticator apps generating time-based
 End users of the Flip application authenticate using Supabase Auth with the following multi-factor verification:
 
 - **At account creation:** Users verify their phone number via SMS one-time password (OTP). Email-based OTP is available as a fallback. This establishes the user's verified identity.
-- **Before sensitive actions:** SMS or email OTP verification is required again before connecting a financial institution via Plaid Link and before account deletion. This protects the actions that involve consumer financial data.
+- **Before account deletion:** SMS or email OTP verification is required again before deleting a user account. This protects the most destructive action in the application.
+- **Before connecting financial accounts:** Users must grant explicit data access consent before connecting via Plaid Link. The Plaid Link flow itself provides additional institution-level authentication (login + MFA at the bank).
 - **On new device or session expiry:** If a user's session expires or they sign in from a new device, OTP verification is required again.
 
 This approach balances security with usability, protecting sensitive financial operations while minimizing friction for day-to-day app usage.

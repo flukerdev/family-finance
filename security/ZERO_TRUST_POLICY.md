@@ -17,7 +17,7 @@ This document describes Flip's implementation of zero trust security principles.
 | **Never trust, always verify** | Every API request requires a valid JWT — no implicit trust based on network location |
 | **Least privilege access** | Row Level Security ensures users can only access their own data |
 | **Assume breach** | Server-side secrets never reach the client; tokens are scoped and short-lived |
-| **Verify explicitly** | Sensitive actions require re-verification via OTP, even with an active session |
+| **Verify explicitly** | Destructive actions (account deletion) require re-verification via OTP; financial connections require explicit data access consent |
 
 ## 3. Authentication Layer
 
@@ -44,11 +44,11 @@ Sensitive operations require additional verification beyond the active session:
 
 | Action | Additional Verification |
 |--------|------------------------|
-| Connecting a bank account (Plaid Link) | OTP re-verification required |
+| Connecting a financial account (Plaid Link) | Data access consent required |
 | Deleting user account | OTP re-verification required |
 | Initial account creation | Email OTP verification required |
 
-This ensures that even if a session token is compromised, an attacker cannot perform high-risk actions without access to the user's email.
+This ensures that destructive actions require access to the user's email, while financial connections are gated behind explicit consent. Users already verify their identity via OTP at signup.
 
 ## 4. Authorization Layer
 

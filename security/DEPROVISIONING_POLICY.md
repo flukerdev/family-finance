@@ -38,7 +38,7 @@ This process is implemented in the Express server endpoint `DELETE /api/account`
 
 ### 3.2 Institution Disconnection
 
-Users can disconnect individual bank connections at any time (Settings > Connected Banks > Disconnect). This immediately:
+Users can disconnect individual bank connections at any time (Settings > Connected Accounts > Disconnect). This immediately:
 
 1. Revokes the Plaid access token via the Plaid API
 2. Deletes the token from the `plaid_items` table

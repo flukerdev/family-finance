@@ -64,7 +64,7 @@ We implement industry-standard security measures to protect your information, in
 
 - Encryption of data in transit using TLS 1.2 or higher
 - Encryption of all data at rest using AES-256
-- SMS-based one-time password verification at signup and before sensitive financial actions, with email OTP as a fallback
+- SMS-based one-time password verification at signup and before account deletion, with email OTP as a fallback
 - Row Level Security (RLS) database policies ensuring users can only access their own data
 - Server-side API authentication verifying user identity on every request
 - Regular security assessments and dependency vulnerability scanning

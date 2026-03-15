@@ -48,10 +48,11 @@ A clean, simple family finance tracking app for Mat & Mara with **automatic bank
    - `plaid_items` - stores Plaid access tokens for connected banks
 
    Run these SQL files in your Supabase SQL Editor:
-   1. [create-config-table.sql](create-config-table.sql) - creates config table with default values
-   2. [create-plaid-table.sql](create-plaid-table.sql) - creates Plaid integration tables
-
-   If you need to clean up old auth tables from previous versions, run [cleanup-auth-tables.sql](cleanup-auth-tables.sql).
+   1. [create-config-table.sql](sql/create-config-table.sql) - creates config table with default values
+   2. [create-plaid-table.sql](sql/create-plaid-table.sql) - creates Plaid integration tables
+   3. [add-user-auth.sql](sql/add-user-auth.sql) - adds user_id columns + RLS policies
+   4. [create-user-consents-table.sql](sql/create-user-consents-table.sql) - consent tracking
+   5. [create-transactions-table.sql](sql/create-transactions-table.sql) - transaction storage + sync cursors
 
 4. **Run the app**:
 
@@ -157,7 +158,7 @@ Deploy the `dist` folder to your hosting service.
 **Account balances not syncing:**
 - Verify account name mapping in `server/index.js`
 - Check server console for errors
-- Ensure you've run the `create-plaid-table.sql` script
+- Ensure you've run the SQL scripts in `sql/`
 
 ## License
 

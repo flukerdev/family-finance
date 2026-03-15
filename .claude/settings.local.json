@@ -14,7 +14,13 @@
       "Bash(taskkill:*)",
       "Bash(powershell:*)",
       "Bash(netstat:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npm install:*)",
+      "Bash(npm ls:*)",
+      "Bash(python:*)",
+      "Bash(node -e:*)",
+      "Bash(npx vite build:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []

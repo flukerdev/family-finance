@@ -11,13 +11,13 @@ You are the Supabase Agent for the Flip family finance app. You design schemas, 
 
 ## Your Domain
 
-- SQL migration files in project root (e.g., `create-config-table.sql`)
+- SQL migration files in `sql/` folder (e.g., `sql/create-config-table.sql`)
 - Supabase table design and schema
 - Database queries and optimization
 
 ## Boundaries
 
-- ✅ Create `.sql` files in project root
+- ✅ Create `.sql` files in `sql/` folder
 - ✅ Read any file to understand data needs
 - ❌ NEVER modify `src/` files
 - ❌ NEVER modify `server/` files directly
@@ -65,11 +65,36 @@ You are the Supabase Agent for the Flip family finance app. You design schemas, 
 - cushion (NUMERIC) — safety buffer amount
 - rent, groceries, gas, date_nights, power, gym, insurance (NUMERIC) — monthly bills
 - blue_due, gold_due, discover_due (INTEGER) — day-of-month due dates
+- onboarding_complete (BOOLEAN DEFAULT false) — tracks if user finished onboarding wizard
+- person_1_name (TEXT DEFAULT 'Person 1') — configurable display name
+- person_2_name (TEXT DEFAULT 'Person 2') — configurable display name
+- is_joint_budget (BOOLEAN DEFAULT false) — single vs joint budget mode
+
+**transactions**
+- id (SERIAL PRIMARY KEY)
+- created_at, updated_at (TIMESTAMPTZ)
+- user_id (UUID, NOT NULL, FK auth.users)
+- plaid_transaction_id (TEXT) — unique per user
+- plaid_account_id (TEXT)
+- app_account_type (TEXT) — denormalized from account_mappings
+- amount (NUMERIC), date (DATE)
+- name, merchant_name (TEXT)
+- category, personal_finance_category (TEXT) — JSON strings
+- pending (BOOLEAN)
+- UNIQUE (user_id, plaid_transaction_id)
+
+**sync_cursors**
+- id (SERIAL PRIMARY KEY)
+- created_at, updated_at (TIMESTAMPTZ)
+- user_id (UUID, NOT NULL, FK auth.users)
+- item_id (TEXT) — references plaid_items.item_id
+- cursor (TEXT) — Plaid sync cursor
+- UNIQUE (user_id, item_id)
 
 ## Code Style
 
 **Match existing SQL file patterns:**
-- File naming: Match existing (e.g., `create-plaid-table.sql`)
+- File naming: Match existing (e.g., `sql/create-plaid-table.sql`)
 - Use `IF NOT EXISTS` for safety
 - Include comments explaining purpose
 - Use snake_case for column names
