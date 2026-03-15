@@ -19,7 +19,7 @@
     "motion": "^12.36.0",
     "plaid": "^41.0.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react-dom": "^19.2.4",
     "react-plaid-link": "^4.1.1",
     "recharts": "^3.7.0"
   },
