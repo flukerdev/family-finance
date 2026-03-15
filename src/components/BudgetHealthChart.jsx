@@ -29,7 +29,7 @@ const CustomTooltip = ({ active, payload, label, theme }) => {
   );
 };
 
-export default function BudgetHealthChart({ budgetProjection, config, latestSnapshot, theme }) {
+export default function BudgetHealthChart({ budgetProjection, config, latestSnapshot, theme, person1Name, person2Name }) {
   if (!budgetProjection || !latestSnapshot) {
     return (
       <div style={{ color: theme?.textDimmed || '#6D8196', fontSize: '0.875rem', textAlign: 'center', padding: '2rem' }}>
@@ -70,7 +70,7 @@ export default function BudgetHealthChart({ budgetProjection, config, latestSnap
 
   // Add payday events
   paydays.forEach(p => {
-    events.push({ date: p.date, delta: p.amount, event: `${p.type === 'mat' ? 'Mat' : 'Mara'} Payday (+$${p.amount})`, isKey: true });
+    events.push({ date: p.date, delta: p.amount, event: `${p.type === 'mat' ? (person1Name || 'Mat') : (person2Name || 'Mara')} Payday (+$${p.amount})`, isKey: true });
   });
 
   // Add rent if due this month

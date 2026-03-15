@@ -16,6 +16,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
+    "motion": "^12.36.0",
     "plaid": "^41.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

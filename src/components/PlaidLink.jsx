@@ -49,7 +49,7 @@ const PlaidLinkButton = ({ linkToken, onSuccess, authFetch }) => {
         opacity: ready ? 1 : 0.6,
       }}
     >
-      {ready ? 'Connect Bank Account' : 'Loading...'}
+      {ready ? 'Connect Account' : 'Loading...'}
     </button>
   );
 };

@@ -29,7 +29,7 @@ const CustomTooltip = ({ active, payload, label, theme }) => {
   );
 };
 
-export default function SafeToSpendChart({ disposableData, person, config, theme }) {
+export default function SafeToSpendChart({ disposableData, person, config, theme, person1Name, person2Name }) {
   if (!disposableData) {
     return (
       <div style={{ color: theme?.textDimmed || '#6D8196', fontSize: '0.875rem', textAlign: 'center', padding: '2rem' }}>
@@ -92,7 +92,7 @@ export default function SafeToSpendChart({ disposableData, person, config, theme
       keyEvents.push({
         date: new Date(payday.date),
         balance: Math.round(runningBalance * 100) / 100,
-        event: `${payday.type === 'mat' ? 'Mat' : 'Mara'} Payday (+$${amount.toFixed(2)})`,
+        event: `${payday.type === 'mat' ? (person1Name || 'Mat') : (person2Name || 'Mara')} Payday (+$${amount.toFixed(2)})`,
         isKey: true,
       });
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import PlaidLink from './components/PlaidLink';
 import AccountMappingUI from './components/AccountMappingUI';
@@ -7,6 +7,7 @@ import CreditCardChart from './components/CreditCardChart';
 import NetPositionChart from './components/NetPositionChart';
 import SafeToSpendChart from './components/SafeToSpendChart';
 import BudgetHealthChart from './components/BudgetHealthChart';
+import Onboarding from './components/Onboarding';
 
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -16,8 +17,15 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // API base URL — defaults to localhost for dev, override via VITE_API_URL for production
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
+// Test mode detection — activates sandbox Plaid (free), skips OTP, shows reset button.
+// ONLY works on localhost with ?testmode in the URL. Ignored on production (Vercel).
+const isTestMode = typeof window !== 'undefined'
+  && window.location.hostname === 'localhost'
+  && new URLSearchParams(window.location.search).has('testmode');
+
 // Authenticated fetch helper — automatically includes the Supabase JWT
 // in the Authorization header so the Express server can verify the user.
+// In test mode, also sends X-Test-Mode header so the server uses sandbox Plaid.
 const authFetch = async (url, options = {}) => {
   const { data: { session: s } } = await supabase.auth.getSession();
   const token = s?.access_token;
@@ -26,6 +34,7 @@ const authFetch = async (url, options = {}) => {
     headers: {
       ...options.headers,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(isTestMode ? { 'X-Test-Mode': 'true' } : {}),
     },
   });
 };
@@ -1530,7 +1539,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     right: 0,
     display: 'flex',
     justifyContent: 'center',
-    gap: '3rem',
+    gap: '1.5rem',
     padding: '0.5rem 0 1.25rem',
     backgroundColor: theme.bg,
     borderTop: `1px solid ${theme.cardBg}`,
@@ -1600,6 +1609,54 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     padding: '1rem',
     borderBottom: `1px solid ${theme.cardBg}`,
   },
+  transactionRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '0.75rem 1rem',
+    borderBottom: `1px solid ${theme.cardBg}`,
+  },
+  transactionDateHeader: {
+    padding: '0.5rem 1rem',
+    fontSize: '0.75rem',
+    fontWeight: '600',
+    color: theme.textDimmed,
+    backgroundColor: theme.bg,
+    position: 'sticky',
+    top: 0,
+    zIndex: 2,
+  },
+  transactionAmount: {
+    fontWeight: '600',
+    fontSize: '0.9375rem',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  accountTag: {
+    display: 'inline-block',
+    fontSize: '0.625rem',
+    fontWeight: '600',
+    padding: '0.125rem 0.5rem',
+    borderRadius: '999px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+    marginTop: '0.25rem',
+  },
+  filterBar: {
+    display: 'flex',
+    gap: '0.5rem',
+    padding: '0.75rem 1rem',
+    alignItems: 'center',
+    borderBottom: `1px solid ${theme.cardBg}`,
+  },
+  filterSelect: {
+    backgroundColor: theme.cardBg,
+    color: theme.text,
+    border: `1px solid ${theme.border || theme.cardBg}`,
+    borderRadius: '0.5rem',
+    padding: '0.375rem 0.75rem',
+    fontSize: '0.8125rem',
+    flex: 1,
+  },
 });
 
 // Default configuration
@@ -1632,7 +1689,10 @@ const DEFAULT_CONFIG = {
     power: 120,
     groceries: 500, // 125 * 4 weeks
     gas: 270, // 67.5 * 4 weeks
-  }
+  },
+  person1Name: 'Mat',
+  person2Name: 'Mara',
+  isJointBudget: true,
 };
 
 export default function App() {
@@ -1690,6 +1750,16 @@ export default function App() {
       });
       if (error) {
         setAuthError(error.message);
+      } else if (isTestMode) {
+        // Test mode: skip OTP verification — sign in directly with password.
+        // The test account must have its email pre-confirmed in Supabase dashboard.
+        const { error: signInErr } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (signInErr) {
+          setAuthError('Test mode auto-login failed: ' + signInErr.message);
+        }
       } else {
         // After successful signup, send an email OTP to verify their email address.
         // This serves as the 2FA step required by Plaid (Q4).
@@ -1812,6 +1882,31 @@ export default function App() {
     }
   };
 
+  // Reset test data — wipes all 7 tables for this user without deleting the auth account.
+  // Only available in test mode (?testmode on localhost). After reset, onboarding appears again.
+  const handleTestReset = async () => {
+    if (!isTestMode) return;
+    const confirmed = window.confirm('Reset all test data? This will clear everything and show onboarding again.');
+    if (!confirmed) return;
+
+    try {
+      const response = await authFetch(`${API_URL}/api/test-reset`, { method: 'POST' });
+      const data = await response.json();
+      if (data.success) {
+        // Reset local state so the app shows onboarding again
+        setOnboardingComplete(false);
+        setConnectedAccounts([]);
+        setSnapshots([]);
+        setConfig(DEFAULT_CONFIG);
+        setPlaidMappedTypes(new Set());
+        // Reload to cleanly reset everything
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error('Test reset failed:', error);
+    }
+  };
+
   // Disconnect a single institution — revokes its Plaid token and removes it from the DB
   const handleDisconnectItem = async (itemId) => {
     try {
@@ -1872,10 +1967,18 @@ export default function App() {
   const [activePopup, setActivePopup] = useState(null); // null or { type, data }
   const [tempConfig, setTempConfig] = useState(config);
   const [syncing, setSyncing] = useState(false);
+  const mappingRef = useRef(null);
+  const [plaidMappedTypes, setPlaidMappedTypes] = useState(new Set());
+  const [creditCards, setCreditCards] = useState([]); // from credit_cards table
   const [connectedAccounts, setConnectedAccounts] = useState([]);
+  const [onboardingComplete, setOnboardingComplete] = useState(null); // null=loading, true/false
   const [plaidConsent, setPlaidConsent] = useState(null); // null = loading, true = granted, false = not granted
   const [plaidOtpVerified, setPlaidOtpVerified] = useState(false); // fresh OTP verified for this Plaid Link session
   const [debugMode, setDebugMode] = useState(false);
+  const [transactions, setTransactions] = useState([]);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [transactionsFilter, setTransactionsFilter] = useState({ account_type: '', limit: 50, offset: 0 });
+  const [transactionsTotal, setTransactionsTotal] = useState(0);
 
   // ─── Theme state ────────────────────────────────────────────────────────────
   // themeMode: 'dark' or 'light' — persisted in localStorage
@@ -1919,6 +2022,19 @@ export default function App() {
   const [selectedAccount, setSelectedAccount] = useState(null); // null or { key, type, label, color }
 
   // Calculate personal splits based on config
+  // Helper: convert a date string to relative time (e.g., "2 hours ago")
+  const getRelativeTime = (dateStr) => {
+    if (!dateStr) return 'Not yet synced';
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
   const getPersonalSplits = () => {
     const matRemainder = config.matPayAmount - (config.matPayAmount * config.splits.give) - (config.matPayAmount * config.splits.save) - config.splits.matLive;
     const maraRemainder = config.maraPayAmount - (config.maraPayAmount * config.splits.give) - (config.maraPayAmount * config.splits.save) - config.splits.maraLive;
@@ -1941,6 +2057,7 @@ export default function App() {
     if (error) {
       console.error('Error fetching config:', error);
       setConfig(DEFAULT_CONFIG);
+      setOnboardingComplete(false);
     } else if (data && data.length > 0) {
       const dbConfig = data[0];
       const loadedConfig = {
@@ -1974,9 +2091,14 @@ export default function App() {
           gas: parseFloat(dbConfig.monthly_gas),
         }
       };
+      loadedConfig.person1Name = dbConfig.person_1_name || 'Person 1';
+      loadedConfig.person2Name = dbConfig.person_2_name || 'Person 2';
+      loadedConfig.isJointBudget = !!dbConfig.is_joint_budget;
       setConfig(loadedConfig);
+      setOnboardingComplete(!!dbConfig.onboarding_complete);
     } else {
       setConfig(DEFAULT_CONFIG);
+      setOnboardingComplete(false);
     }
   };
 
@@ -2021,6 +2143,21 @@ export default function App() {
     }
   };
 
+  // Mark onboarding as complete and save person names to app_config
+  const markOnboardingComplete = async (configUpdates) => {
+    const { person_1_name, person_2_name, is_joint_budget } = configUpdates;
+    const { error } = await supabase
+      .from('app_config')
+      .upsert({
+        user_id: session.user.id,
+        onboarding_complete: true,
+        person_1_name,
+        person_2_name,
+        is_joint_budget,
+      }, { onConflict: 'user_id' });
+    if (error) console.error('Error marking onboarding complete:', error);
+  };
+
   // Fetch connected Plaid accounts
   const fetchConnectedAccounts = async () => {
     try {
@@ -2035,6 +2172,38 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error:', error);
+    }
+  };
+
+  // Fetch which app_account_types have Plaid mappings (to disable manual card entry for those)
+  const fetchPlaidMappings = async () => {
+    try {
+      const response = await authFetch(`${API_URL}/api/mappings`);
+      const data = await response.json();
+      if (data.mappings) {
+        // Build set of mapped types for both old (app_account_type) and new (card_id) formats
+        const types = new Set();
+        data.mappings.forEach(m => {
+          if (m.app_account_type) types.add(m.app_account_type);
+          if (m.card_id) types.add(m.card_id);
+        });
+        setPlaidMappedTypes(types);
+      }
+    } catch (error) {
+      console.error('Error fetching mappings:', error);
+    }
+  };
+
+  // Fetch credit cards from the credit_cards table
+  const fetchCreditCards = async () => {
+    try {
+      const response = await authFetch(`${API_URL}/api/credit-cards`);
+      const data = await response.json();
+      if (data.credit_cards) {
+        setCreditCards(data.credit_cards);
+      }
+    } catch (error) {
+      console.error('Error fetching credit cards:', error);
     }
   };
 
@@ -2096,11 +2265,15 @@ export default function App() {
 
   // Sync balances from Plaid
   // silent=true skips user-facing messages (used for auto-sync on load)
-  const syncBalances = async (silent = false) => {
+  // force=true bypasses server-side throttle (used after first mapping save)
+  const syncBalances = async (silent = false, force = false) => {
     setSyncing(true);
     if (!silent) setMessage('');
     try {
-      const response = await authFetch(`${API_URL}/api/sync_balances`, {
+      const url = force
+        ? `${API_URL}/api/sync_balances?force=true`
+        : `${API_URL}/api/sync_balances`;
+      const response = await authFetch(url, {
         method: 'POST',
       });
       const data = await response.json();
@@ -2120,12 +2293,110 @@ export default function App() {
     }
   };
 
+  // Sync transactions from Plaid (cursor-based incremental sync)
+  // force=true bypasses server-side 4-hour throttle
+  const syncTransactions = async (silent = false, force = false) => {
+    try {
+      const url = force
+        ? `${API_URL}/api/sync_transactions?force=true`
+        : `${API_URL}/api/sync_transactions`;
+      const response = await authFetch(url, { method: 'POST' });
+      const data = await response.json();
+      if (data.success && !data.skipped && !silent) {
+        setMessage('✅ Transactions synced!');
+      }
+      return data;
+    } catch (error) {
+      console.error('Error syncing transactions:', error);
+    }
+  };
+
+  // Called after AccountMappingUI saves mappings — triggers auto-sync
+  const handleMappingSaved = async () => {
+    setSyncing(true);
+    setMessage('Syncing your accounts...');
+    try {
+      // Force bypass throttle since this is right after mapping
+      await syncBalances(true, true);
+      await syncTransactions(true, true);
+      await fetchConnectedAccounts(); // Refresh last_synced timestamps
+      await fetchPlaidMappings(); // Refresh which cards are Plaid-managed
+      await fetchCreditCards(); // Refresh credit card config
+      setMessage('✅ Accounts synced successfully!');
+    } catch (error) {
+      console.error('Error during post-mapping sync:', error);
+      setMessage('❌ Error syncing. Try refreshing the page.');
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  };
+
   // Handle successful Plaid Link
   const handlePlaidSuccess = (metadata) => {
-    setMessage('✅ Bank account connected successfully!');
+    setMessage('✅ Account connected successfully!');
     fetchConnectedAccounts();
     setTimeout(() => setMessage(''), 3000);
   };
+
+  // Account bucket color/label map for transaction rows
+  // Includes both old names (mat/mara) and new names (person1/person2) for backward compat
+  const bucketColors = { live: theme.live, person1: theme.mat, person2: theme.mara };
+  const ACCOUNT_BUCKET_MAP = {
+    give: { color: theme.give, label: 'GIVE' },
+    save: { color: theme.save, label: 'SAVE' },
+    live: { color: theme.live, label: 'LIVE' },
+    mat: { color: theme.mat, label: (config.person1Name || 'Mat').toUpperCase() },
+    mara: { color: theme.mara, label: (config.person2Name || 'Mara').toUpperCase() },
+    person1: { color: theme.mat, label: (config.person1Name || 'Person 1').toUpperCase() },
+    person2: { color: theme.mara, label: (config.person2Name || 'Person 2').toUpperCase() },
+    primary: { color: theme.text, label: 'PRIMARY' },
+    unmapped: { color: theme.textDimmed, label: '???' },
+    // Legacy card entries
+    blue_total: { color: theme.live, label: 'BLUE' },
+    gold_total: { color: theme.mat, label: 'GOLD' },
+    discover_total: { color: theme.mara, label: 'DISC' },
+  };
+  // Add dynamic card entries from creditCards state
+  for (const card of getEffectiveCreditCards()) {
+    const color = bucketColors[card.paid_from_bucket] || theme.live;
+    ACCOUNT_BUCKET_MAP[card.card_id] = { color, label: card.label?.substring(0, 4)?.toUpperCase() || card.card_id.toUpperCase() };
+  }
+
+  // Fetch transactions with optional filter override (avoids stale closure)
+  const fetchTransactions = async (filterOverride = null) => {
+    setTransactionsLoading(true);
+    try {
+      const f = filterOverride || transactionsFilter;
+      const params = new URLSearchParams();
+      if (f.account_type) params.append('account_type', f.account_type);
+      if (f.limit) params.append('limit', String(f.limit));
+      if (f.offset) params.append('offset', String(f.offset));
+
+      const response = await authFetch(`${API_URL}/api/transactions?${params.toString()}`);
+      const data = await response.json();
+
+      if (f.offset > 0) {
+        // Load more — append to existing list
+        setTransactions(prev => [...prev, ...data.transactions]);
+      } else {
+        // Fresh fetch or filter change — replace list
+        setTransactions(data.transactions);
+      }
+      setTransactionsTotal(data.total);
+    } catch (error) {
+      console.error('Error fetching transactions:', error);
+    } finally {
+      setTransactionsLoading(false);
+    }
+  };
+
+  // Lazy-load transactions when user first visits the tab
+  useEffect(() => {
+    if (currentView === 'transactions' && transactions.length === 0 && !transactionsLoading) {
+      fetchTransactions({ account_type: '', limit: 50, offset: 0 });
+    }
+  }, [currentView]);
 
   // Fetch latest snapshot and config on load, auto-sync with Plaid
   useEffect(() => {
@@ -2133,6 +2404,8 @@ export default function App() {
       await fetchConfig();
       await fetchConnectedAccounts();
       await checkPlaidConsent();
+      await fetchPlaidMappings();
+      await fetchCreditCards();
       // Auto-sync: silently pull latest Plaid balances (rate-limited server-side to 1hr)
       await syncBalances(true);
       // fetchSnapshots is already called inside syncBalances, but call it as fallback
@@ -2188,6 +2461,24 @@ export default function App() {
     }
   }, [menuView, config]);
 
+  // Helper: read a bucket value from a snapshot, preferring JSONB then falling back to old columns
+  const getSnapshotBucket = (s, bucket) => {
+    if (s?.buckets && bucket in s.buckets) return s.buckets[bucket];
+    // Fallback: person1→mat, person2→mara
+    const legacyKey = bucket === 'person1' ? 'mat' : bucket === 'person2' ? 'mara' : bucket;
+    return s?.[legacyKey] ?? 0;
+  };
+
+  // Helper: read a card value from a snapshot, preferring JSONB then falling back to old columns
+  const getSnapshotCard = (s, cardId) => {
+    if (s?.cards && cardId in s.cards) return s.cards[cardId];
+    // Fallback: try old columns like blue_total/blue_statement
+    return {
+      total: s?.[`${cardId}_total`] ?? 0,
+      statement: s?.[`${cardId}_statement`] ?? 0,
+    };
+  };
+
   const fetchSnapshots = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -2202,19 +2493,25 @@ export default function App() {
     } else if (data && data.length > 0) {
       setLatestSnapshot(data[0]);
       setSnapshots(data);
-      setBalances({
-        give: data[0].give.toString(),
-        save: data[0].save.toString(),
-        live: data[0].live.toString(),
-        mat: data[0].mat.toString(),
-        mara: data[0].mara.toString(),
-        blue_total: (data[0].blue_total || 0).toString(),
-        blue_statement: (data[0].blue_statement || 0).toString(),
-        gold_total: (data[0].gold_total || 0).toString(),
-        gold_statement: (data[0].gold_statement || 0).toString(),
-        discover_total: (data[0].discover_total || 0).toString(),
-        discover_statement: (data[0].discover_statement || 0).toString(),
+      // Populate balances state from JSONB columns with fallback to old columns
+      const latest = data[0];
+      const b = latest.buckets || {};
+      const newBalances = {
+        give: (b.give ?? latest.give ?? 0).toString(),
+        save: (b.save ?? latest.save ?? 0).toString(),
+        live: (b.live ?? latest.live ?? 0).toString(),
+        mat: (b.person1 ?? latest.mat ?? 0).toString(),
+        mara: (b.person2 ?? latest.mara ?? 0).toString(),
+      };
+      // Add card balances dynamically from creditCards state, with fallback to old columns
+      (creditCards.length > 0 ? creditCards : [
+        { card_id: 'blue' }, { card_id: 'gold' }, { card_id: 'discover' }
+      ]).forEach(card => {
+        const cardData = getSnapshotCard(latest, card.card_id);
+        newBalances[`${card.card_id}_total`] = (cardData.total ?? 0).toString();
+        newBalances[`${card.card_id}_statement`] = (cardData.statement ?? 0).toString();
       });
+      setBalances(newBalances);
     }
     setLoading(false);
   };
@@ -2223,7 +2520,30 @@ export default function App() {
     setSaving(true);
     setMessage('');
 
+    // Build JSONB buckets and cards objects alongside legacy flat columns
+    const bucketsObj = {
+      give: parseFloat(balances.give) || 0,
+      save: parseFloat(balances.save) || 0,
+      live: parseFloat(balances.live) || 0,
+      person1: parseFloat(balances.mat) || 0,
+      person2: parseFloat(balances.mara) || 0,
+    };
+    const cardsObj = {};
+    (creditCards.length > 0 ? creditCards : [
+      { card_id: 'blue' }, { card_id: 'gold' }, { card_id: 'discover' }
+    ]).forEach(card => {
+      const totalKey = `${card.card_id}_total`;
+      const stmtKey = `${card.card_id}_statement`;
+      if (balances[totalKey] !== undefined) {
+        cardsObj[card.card_id] = {
+          total: parseFloat(balances[totalKey]) || 0,
+          statement: parseFloat(balances[stmtKey]) || 0,
+        };
+      }
+    });
+
     const snapshot = {
+      // Legacy flat columns (backward compat)
       give: parseFloat(balances.give) || 0,
       save: parseFloat(balances.save) || 0,
       live: parseFloat(balances.live) || 0,
@@ -2235,6 +2555,9 @@ export default function App() {
       gold_statement: parseFloat(balances.gold_statement) || 0,
       discover_total: parseFloat(balances.discover_total) || 0,
       discover_statement: parseFloat(balances.discover_statement) || 0,
+      // New JSONB columns
+      buckets: bucketsObj,
+      cards: cardsObj,
       user_id: session.user.id,
     };
 
@@ -2289,35 +2612,51 @@ export default function App() {
     return paydays.sort((a, b) => a.date - b.date);
   };
 
-  // Get upcoming bills/due dates
+  // Build the effective credit cards list: use creditCards from DB if available,
+  // otherwise fall back to hardcoded defaults for backward compatibility
+  function getEffectiveCreditCards() {
+    if (creditCards.length > 0) return creditCards;
+    // Fallback: reconstruct from config (pre-migration data)
+    const bucketToPersonLabel = { live: 'LIVE', person1: config.person1Name, person2: config.person2Name };
+    return [
+      { card_id: 'blue', label: 'Blue Amex', due_day: config.dueDates?.blue || 8, statement_close_day: config.statementCloseDates?.blue || 14, paid_from_bucket: 'live' },
+      { card_id: 'gold', label: `${config.person1Name}'s Gold Amex`, due_day: config.dueDates?.gold || 15, statement_close_day: config.statementCloseDates?.gold || 21, paid_from_bucket: 'person1' },
+      { card_id: 'discover', label: `${config.person2Name}'s Discover`, due_day: config.dueDates?.discover || 2, statement_close_day: config.statementCloseDates?.discover || 25, paid_from_bucket: 'person2' },
+    ];
+  }
+
+  // Get upcoming bills/due dates — dynamically from creditCards array
   const getUpcomingBills = () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const bills = [];
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
+    const effectiveCards = getEffectiveCreditCards();
 
     // Check this month and next month
     for (let monthOffset = 0; monthOffset <= 1; monthOffset++) {
       const month = (currentMonth + monthOffset) % 12;
       const year = currentMonth + monthOffset > 11 ? currentYear + 1 : currentYear;
 
-      // Discover due 2nd
-      const discoverDate = new Date(year, month, 2);
-      if (discoverDate >= today) {
-        bills.push({ date: discoverDate, type: 'discover', name: "Mara's Discover", account: 'mara', dueDay: 2 });
-      }
-
-      // Blue Amex due 8th
-      const blueDate = new Date(year, month, 8);
-      if (blueDate >= today) {
-        bills.push({ date: blueDate, type: 'blue', name: 'Blue Amex', account: 'live', dueDay: 8 });
-      }
-
-      // Gold Amex due 15th
-      const goldDate = new Date(year, month, 15);
-      if (goldDate >= today) {
-        bills.push({ date: goldDate, type: 'gold', name: "Mat's Gold Amex", account: 'mat', dueDay: 15 });
+      // Add bill entries for each credit card
+      for (const card of effectiveCards) {
+        const dueDate = new Date(year, month, card.due_day);
+        if (dueDate >= today) {
+          // Map paid_from_bucket to old account names for backward compat
+          const account = card.paid_from_bucket === 'person1' ? 'mat'
+            : card.paid_from_bucket === 'person2' ? 'mara'
+            : card.paid_from_bucket || 'live';
+          bills.push({
+            date: dueDate,
+            type: card.card_id,
+            name: card.label,
+            account,
+            dueDay: card.due_day,
+            cardId: card.card_id,
+            paidFromBucket: card.paid_from_bucket,
+          });
+        }
       }
 
       // Rent - last day of month
@@ -2327,46 +2666,36 @@ export default function App() {
       }
     }
 
-    return bills.sort((a, b) => a.date - b.date).slice(0, 6);
+    return bills.sort((a, b) => a.date - b.date).slice(0, Math.max(6, effectiveCards.length * 2 + 2));
   };
 
-  // Get sorted credit cards by next due date
+  // Get sorted credit cards by next due date — built dynamically from creditCards state
   const getSortedCreditCards = () => {
     if (!latestSnapshot) return [];
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const bills = getUpcomingBills();
+    const effectiveCards = getEffectiveCreditCards();
 
-    const cards = [
-      {
-        type: 'discover',
-        name: "Mara's Discover",
-        account: 'mara',
-        total: latestSnapshot.discover_total || 0,
-        statement: latestSnapshot.discover_statement || 0,
-        dueDay: 2,
-        nextDue: bills.find(b => b.type === 'discover')?.date
-      },
-      {
-        type: 'blue',
-        name: 'Blue Amex',
-        account: 'live',
-        total: latestSnapshot.blue_total || 0,
-        statement: latestSnapshot.blue_statement || 0,
-        dueDay: 8,
-        nextDue: bills.find(b => b.type === 'blue')?.date
-      },
-      {
-        type: 'gold',
-        name: "Mat's Gold Amex",
-        account: 'mat',
-        total: latestSnapshot.gold_total || 0,
-        statement: latestSnapshot.gold_statement || 0,
-        dueDay: 15,
-        nextDue: bills.find(b => b.type === 'gold')?.date
-      },
-    ];
+    const cards = effectiveCards.map(card => {
+      const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+      const account = card.paid_from_bucket === 'person1' ? 'mat'
+        : card.paid_from_bucket === 'person2' ? 'mara'
+        : card.paid_from_bucket || 'live';
+      return {
+        type: card.card_id,
+        cardId: card.card_id,
+        name: card.label,
+        account,
+        paidFromBucket: card.paid_from_bucket,
+        total: cardData.total || 0,
+        statement: cardData.statement || 0,
+        dueDay: card.due_day,
+        statementCloseDay: card.statement_close_day,
+        nextDue: bills.find(b => b.type === card.card_id)?.date,
+      };
+    });
 
     return cards.sort((a, b) => {
       if (!a.nextDue) return 1;
@@ -2376,18 +2705,19 @@ export default function App() {
   };
 
   // Find when a statement was paid off (first occurrence of 0 balance)
-  const findPaymentDate = (cardType) => {
+  const findPaymentDate = (cardId) => {
     if (!snapshots || snapshots.length === 0) return null;
-
-    const fieldName = `${cardType}_statement`;
 
     // Sort snapshots by date ascending (oldest first)
     const sortedSnapshots = [...snapshots].sort((a, b) =>
       new Date(a.created_at) - new Date(b.created_at)
     );
 
-    // Find first snapshot where statement is 0
-    const paidSnapshot = sortedSnapshots.find(s => s[fieldName] === 0);
+    // Find first snapshot where statement is 0 — check JSONB first, then old columns
+    const paidSnapshot = sortedSnapshots.find(s => {
+      const cardData = getSnapshotCard(s, cardId);
+      return cardData.statement === 0;
+    });
 
     if (paidSnapshot) {
       return new Date(paidSnapshot.created_at);
@@ -2398,16 +2728,13 @@ export default function App() {
 
   // Get the due date for the current billing cycle (the one that was just paid, not the next upcoming one)
   // This is needed to correctly calculate "days early" for paid statements
-  const getCurrentCycleDueDate = (cardType, paymentDate) => {
+  const getCurrentCycleDueDate = (cardId, paymentDate) => {
     if (!paymentDate) return null;
 
-    const dueDays = {
-      discover: config.dueDates.discover,
-      gold: config.dueDates.gold,
-      blue: config.dueDates.blue
-    };
-
-    const dueDay = dueDays[cardType];
+    // Look up due_day from creditCards array, with fallback to config
+    const effectiveCards = getEffectiveCreditCards();
+    const card = effectiveCards.find(c => c.card_id === cardId);
+    const dueDay = card?.due_day || config.dueDates?.[cardId];
     if (!dueDay) return null;
 
     // Start from the payment date and find the due date for that billing cycle
@@ -2447,10 +2774,10 @@ export default function App() {
       if (accountType === 'live') {
         if (payday.type === 'mat') projectedBalance += config.splits.matLive;
         if (payday.type === 'mara') projectedBalance += config.splits.maraLive;
-      } else if (accountType === 'mat') {
+      } else if (accountType === 'mat' || accountType === 'person1') {
         if (payday.type === 'mat') projectedBalance += personalSplits.matPersonalFromMat;
         if (payday.type === 'mara') projectedBalance += personalSplits.matPersonalFromMara;
-      } else if (accountType === 'mara') {
+      } else if (accountType === 'mara' || accountType === 'person2') {
         if (payday.type === 'mat') projectedBalance += personalSplits.maraPersonalFromMat;
         if (payday.type === 'mara') projectedBalance += personalSplits.maraPersonalFromMara;
       }
@@ -2460,7 +2787,7 @@ export default function App() {
           canPay: true,
           dateAvailable: payday.date,
           projectedBalance,
-          details: `Balance will reach $${projectedBalance.toFixed(2)} after ${payday.type === 'mat' ? 'Mat' : 'Mara'}'s paycheck on ${payday.date.toLocaleDateString()}`
+          details: `Balance will reach $${projectedBalance.toFixed(2)} after ${payday.type === 'mat' ? config.person1Name : config.person2Name}'s paycheck on ${payday.date.toLocaleDateString()}`
         };
       }
     }
@@ -2486,10 +2813,13 @@ export default function App() {
 
   // Get the ACTUAL next payment due date, accounting for billing cycles
   // If statement is paid ($0), the next payment is due NEXT billing cycle, not this one
-  const getNextPaymentDueDate = (cardType, statementBalance) => {
+  const getNextPaymentDueDate = (cardId, statementBalance) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const dueDay = config.dueDates[cardType];
+    // Look up due_day from creditCards array, with fallback to config
+    const effectiveCards = getEffectiveCreditCards();
+    const card = effectiveCards.find(c => c.card_id === cardId);
+    const dueDay = card?.due_day || config.dueDates?.[cardId];
 
     // Find next calendar occurrence of due date
     let nextDue = new Date(today.getFullYear(), today.getMonth(), dueDay);
@@ -2506,31 +2836,46 @@ export default function App() {
     return nextDue;
   };
 
-  // Calculate safe-to-spend amount for Mat or Mara
+  // Calculate safe-to-spend amount for a person (mat/mara or person1/person2)
+  // Dynamically finds which credit cards are paid from this person's bucket
   const calculateDisposableIncome = (person) => {
     if (!latestSnapshot) return null;
 
-    const accountBalance = latestSnapshot[person.toLowerCase()];
+    // Normalize person to bucket name
+    const bucket = person === 'mat' ? 'person1' : person === 'mara' ? 'person2' : person;
+    const accountBalance = getSnapshotBucket(latestSnapshot, bucket);
     const cushion = config.cushion;
 
-    // Determine which card this person pays
-    let cardType, cardStatement, cardTotal;
+    // Find all credit cards paid from this person's bucket
+    const effectiveCards = getEffectiveCreditCards();
+    const personCards = effectiveCards.filter(c => c.paid_from_bucket === bucket);
 
-    if (person === 'mat') {
-      cardType = 'gold';
-      cardStatement = latestSnapshot.gold_statement || 0;
-      cardTotal = latestSnapshot.gold_total || 0;
-    } else if (person === 'mara') {
-      cardType = 'discover';
-      cardStatement = latestSnapshot.discover_statement || 0;
-      cardTotal = latestSnapshot.discover_total || 0;
-    } else {
-      return null;
+    // Sum all card payments this person owes
+    let totalCardStatement = 0;
+    let totalCardTotal = 0;
+    let primaryCardId = null;
+    let primaryDueDate = null;
+
+    for (const card of personCards) {
+      const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+      totalCardStatement += cardData.statement || 0;
+      totalCardTotal += cardData.total || 0;
+
+      // Track the earliest due date among this person's cards
+      const nextDue = getNextPaymentDueDate(card.card_id, cardData.statement);
+      if (!primaryDueDate || nextDue < primaryDueDate) {
+        primaryDueDate = nextDue;
+        primaryCardId = card.card_id;
+      }
     }
 
-    // Get the ACTUAL next payment due date (accounts for paid statements)
-    // If statement = $0, next payment is NEXT cycle, not this one
-    const nextDueDate = getNextPaymentDueDate(cardType, cardStatement);
+    // If no cards assigned to this person, use a far-future due date
+    if (!primaryDueDate) {
+      primaryDueDate = new Date();
+      primaryDueDate.setMonth(primaryDueDate.getMonth() + 1);
+    }
+
+    const nextDueDate = primaryDueDate;
 
     // Calculate paychecks before next due date
     const paydays = getUpcomingPaydays();
@@ -2539,19 +2884,18 @@ export default function App() {
 
     for (const payday of paydays) {
       if (payday.date <= nextDueDate) {
-        if (person === 'mat') {
+        if (bucket === 'person1') {
           if (payday.type === 'mat') futureDeposits += personalSplits.matPersonalFromMat;
           if (payday.type === 'mara') futureDeposits += personalSplits.matPersonalFromMara;
-        } else if (person === 'mara') {
+        } else if (bucket === 'person2') {
           if (payday.type === 'mat') futureDeposits += personalSplits.maraPersonalFromMat;
           if (payday.type === 'mara') futureDeposits += personalSplits.maraPersonalFromMara;
         }
       }
     }
 
-    // Next payment amount: use statement if > 0, otherwise use total balance (conservative approach)
-    // When statement is $0, we still need to reserve for the total balance due next cycle
-    const nextPaymentAmount = cardStatement > 0 ? cardStatement : cardTotal;
+    // Next payment amount: use statement sum if > 0, otherwise use total balance sum
+    const nextPaymentAmount = totalCardStatement > 0 ? totalCardStatement : totalCardTotal;
 
     // Safe to Spend calculation
     const disposableIncome = accountBalance - cushion + futureDeposits - nextPaymentAmount;
@@ -2560,9 +2904,9 @@ export default function App() {
     const paydaysBeforeDue = paydays.filter(p => p.date <= nextDueDate);
     const depositAmounts = paydaysBeforeDue.map(p => {
       let amount = 0;
-      if (person === 'mat') {
+      if (bucket === 'person1') {
         amount = p.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara;
-      } else if (person === 'mara') {
+      } else if (bucket === 'person2') {
         amount = p.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara;
       }
       return { date: p.date, type: p.type, amount };
@@ -2574,10 +2918,10 @@ export default function App() {
       cushion,
       futureDeposits,
       nextPaymentAmount,
-      cardStatement,
-      cardTotal,
+      cardStatement: totalCardStatement,
+      cardTotal: totalCardTotal,
       nextDueDate,
-      cardType,
+      cardType: primaryCardId,
       paydaysBeforeDue,
       depositAmounts,
     };
@@ -2595,10 +2939,10 @@ export default function App() {
     let calc = `Current balance: $${dispData.accountBalance.toFixed(2)}\n`;
     calc += `+ Future deposits (until ${dispData.nextDueDate.toLocaleDateString()}): +$${dispData.futureDeposits.toFixed(2)}\n`;
     dispData.paydaysBeforeDue.forEach(pd => {
-      const amount = person === 'Mat'
+      const amount = person === 'mat'
         ? (pd.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara)
         : (pd.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara);
-      calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
+      calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? config.person1Name : config.person2Name}): +$${amount.toFixed(2)}\n`;
     });
     calc += `✓ Projected balance: $${projectedBeforePayment.toFixed(2)}\n`;
     if (dispData.cardStatement > 0) {
@@ -2649,7 +2993,7 @@ export default function App() {
         } else if (accountType === 'mara') {
           amount = pd.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara;
         }
-        calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? 'Mat' : 'Mara'}): +$${amount.toFixed(2)}\n`;
+        calc += `  • ${pd.date.toLocaleDateString()} (${pd.type === 'mat' ? config.person1Name : config.person2Name}): +$${amount.toFixed(2)}\n`;
       });
     }
 
@@ -2683,11 +3027,9 @@ export default function App() {
   const calculateBudgetHealth = () => {
     if (!latestSnapshot) return null;
 
-    // Ensure all required fields exist
-    if (typeof latestSnapshot.live !== 'number' ||
-        typeof latestSnapshot.blue_statement !== 'number') {
-      return null;
-    }
+    // Check LIVE balance exists (use JSONB with fallback)
+    const liveBalance = getSnapshotBucket(latestSnapshot, 'live');
+    if (typeof liveBalance !== 'number') return null;
 
     const today = new Date();
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
@@ -2697,7 +3039,7 @@ export default function App() {
     const bills = getUpcomingBills();
 
     // Start with current LIVE balance
-    let projectedLive = latestSnapshot.live;
+    let projectedLive = liveBalance;
 
     // Add all paychecks before end of month
     for (const payday of paydays) {
@@ -2713,9 +3055,15 @@ export default function App() {
       projectedLive -= config.monthlyBills.rent;
     }
 
-    // Subtract Blue Amex TOTAL balance (must be paid off)
-    const blueTotalBalance = latestSnapshot.blue_total || 0;
-    projectedLive -= blueTotalBalance;
+    // Subtract ALL credit cards paid from LIVE bucket (was hardcoded to blue_total only)
+    const effectiveCards = getEffectiveCreditCards();
+    const liveCards = effectiveCards.filter(c => c.paid_from_bucket === 'live');
+    let totalLiveCardBalance = 0;
+    for (const card of liveCards) {
+      const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+      totalLiveCardBalance += cardData.total || 0;
+    }
+    projectedLive -= totalLiveCardBalance;
 
     // Subtract projected remaining monthly expenses
     const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
@@ -2734,8 +3082,6 @@ export default function App() {
     const isOverBudget = surplus < 0;
 
     // Budget Health Score: 0-100
-    // 100 = $200+ surplus, 0 = -$300 or worse, linear scale between
-    // Range is $500 total (-300 to +200)
     const budgetHealthScore = Math.round(Math.min(100, Math.max(0, ((surplus + 300) / 500) * 100)));
 
     return {
@@ -2744,11 +3090,11 @@ export default function App() {
       isOverBudget,
       budgetHealthScore,
       details: {
-        startingBalance: latestSnapshot.live,
+        startingBalance: liveBalance,
         projectedInflows: paydays.filter(p => p.date <= endOfMonth).reduce((sum, p) =>
           sum + (p.type === 'mat' ? config.splits.matLive : config.splits.maraLive), 0),
         rent: rentBill ? config.monthlyBills.rent : 0,
-        blueAmex: blueTotalBalance,
+        liveCardTotal: totalLiveCardBalance,
         projectedRemainingExpenses,
         safetyBuffer: config.cushion,
         daysRemaining,
@@ -2798,145 +3144,104 @@ export default function App() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const bills = getUpcomingBills();
-
-    // Get next credit card bills
-    const nextDiscover = bills.find(b => b.type === 'discover');
-    const nextBlue = bills.find(b => b.type === 'blue');
-    const nextGold = bills.find(b => b.type === 'gold');
+    const effectiveCards = getEffectiveCreditCards();
+    const personalSplits = getPersonalSplits();
+    const upcomingPaydays = getUpcomingPaydays();
 
     const billChecks = [];
 
-    // Check Discover (Mara)
-    if (nextDiscover) {
-      const discoverCheck = calculatePaymentDate('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date);
+    // Helper: get deposit amounts for a paid_from_bucket before a due date
+    const getDepositsForBucket = (paidFromBucket, dueDate) => {
+      const paydaysBefore = upcomingPaydays.filter(p => p.date < dueDate);
+      return paydaysBefore.map(p => {
+        let amount = 0;
+        if (paidFromBucket === 'live') {
+          amount = p.type === 'mat' ? (config.splits.matLive || 984) : (config.splits.maraLive || 656);
+        } else if (paidFromBucket === 'person1') {
+          amount = p.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara;
+        } else if (paidFromBucket === 'person2') {
+          amount = p.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara;
+        }
+        return { date: p.date, type: p.type, amount };
+      });
+    };
+
+    // Helper: get display name for a paid_from_bucket
+    const getBucketDisplayName = (paidFromBucket) => {
+      if (paidFromBucket === 'person1') return config.person1Name;
+      if (paidFromBucket === 'person2') return config.person2Name;
+      return 'LIVE';
+    };
+
+    // Helper: map paid_from_bucket to old account type for calculatePaymentDate
+    const bucketToAccountType = (paidFromBucket) => {
+      if (paidFromBucket === 'person1') return 'mat';
+      if (paidFromBucket === 'person2') return 'mara';
+      return 'live';
+    };
+
+    // Check each credit card dynamically
+    for (const card of effectiveCards) {
+      const nextBill = bills.find(b => b.type === card.card_id);
+      if (!nextBill) continue;
+
+      const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+      const accountType = bucketToAccountType(card.paid_from_bucket);
+      const accountBalance = getSnapshotBucket(latestSnapshot, card.paid_from_bucket || 'live');
+      const accountDisplayName = getBucketDisplayName(card.paid_from_bucket);
+
+      const paymentCheck = calculatePaymentDate(accountType, accountBalance, cardData.statement, nextBill.date);
       billChecks.push({
-        name: 'Discover',
-        account: 'Mara',
-        dueDate: nextDiscover.date,
-        statement: latestSnapshot.discover_statement,
-        ...discoverCheck
+        name: card.label,
+        account: accountDisplayName,
+        dueDate: nextBill.date,
+        statement: cardData.statement,
+        ...paymentCheck
       });
 
-      if (latestSnapshot.discover_statement === 0) {
-        if (latestSnapshot.discover_total === 0) {
+      if (cardData.statement === 0) {
+        if (cardData.total === 0) {
           positives.push({
-            message: "Discover: Paid in full!",
-            icon: 'check', person: 'mara', account: 'discover',
+            message: `${card.label}: Paid in full!`,
+            icon: 'check', person: accountType, account: card.card_id,
           });
         } else {
           positives.push({
-            message: "Discover: Statement balance is paid off!",
-            icon: 'check', person: 'mara', account: 'discover',
-            details: `Total balance: $${latestSnapshot.discover_total.toFixed(2)}`,
+            message: `${card.label}: Statement balance is paid off!`,
+            icon: 'check', person: accountType, account: card.card_id,
+            details: `Total balance: $${cardData.total.toFixed(2)}`,
           });
         }
-      } else if (discoverCheck.canPay) {
+      } else if (paymentCheck.canPay) {
         positives.push({
-          message: `Discover: On pace to be covered!`,
-          icon: 'trending', person: 'mara', account: 'discover',
-          details: discoverCheck.details,
-          calculation: generateBillPaymentCalculation('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date, discoverCheck),
-          disposableData: { accountBalance: latestSnapshot.mara, nextPaymentAmount: latestSnapshot.discover_statement, nextDueDate: nextDiscover.date, cushion: config.cushion, paydaysBeforeDue: getUpcomingPaydays().filter(p => p.date < nextDiscover.date), depositAmounts: getUpcomingPaydays().filter(p => p.date < nextDiscover.date).map(p => ({ date: p.date, type: p.type, amount: p.type === 'mat' ? getPersonalSplits().maraPersonalFromMat : getPersonalSplits().maraPersonalFromMara })) },
+          message: `${card.label}: On pace to be covered!`,
+          icon: 'trending', person: accountType, account: card.card_id,
+          details: paymentCheck.details,
+          calculation: generateBillPaymentCalculation(accountType, accountBalance, cardData.statement, nextBill.date, paymentCheck),
+          disposableData: {
+            accountBalance,
+            nextPaymentAmount: cardData.statement,
+            nextDueDate: nextBill.date,
+            cushion: config.cushion,
+            paydaysBeforeDue: upcomingPaydays.filter(p => p.date < nextBill.date),
+            depositAmounts: getDepositsForBucket(card.paid_from_bucket, nextBill.date),
+          },
         });
       } else {
         alerts.push({
           severity: 'critical',
-          message: `Mara's Discover: Statement balance is not paid. Due ${nextDiscover.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. $${Math.round(discoverCheck.shortfall)} short of covering the statement balance.`,
-          details: discoverCheck.details,
-          calculation: generateBillPaymentCalculation('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date, discoverCheck)
-        });
-      }
-    }
-
-    // Check Gold (Mat)
-    if (nextGold) {
-      const goldCheck = calculatePaymentDate('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date);
-      billChecks.push({
-        name: 'Gold Amex',
-        account: 'Mat',
-        dueDate: nextGold.date,
-        statement: latestSnapshot.gold_statement,
-        ...goldCheck
-      });
-
-      if (latestSnapshot.gold_statement === 0) {
-        if (latestSnapshot.gold_total === 0) {
-          positives.push({
-            message: "Gold Amex: Paid in full!",
-            icon: 'check', person: 'mat', account: 'gold',
-          });
-        } else {
-          positives.push({
-            message: "Gold Amex: Statement balance is paid off!",
-            icon: 'check', person: 'mat', account: 'gold',
-            details: `Total balance: $${latestSnapshot.gold_total.toFixed(2)}`,
-          });
-        }
-      } else if (goldCheck.canPay) {
-        positives.push({
-          message: `Gold Amex: On pace to be covered!`,
-          icon: 'trending', person: 'mat', account: 'gold',
-          details: goldCheck.details,
-          calculation: generateBillPaymentCalculation('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date, goldCheck),
-          disposableData: { accountBalance: latestSnapshot.mat, nextPaymentAmount: latestSnapshot.gold_statement, nextDueDate: nextGold.date, cushion: config.cushion, paydaysBeforeDue: getUpcomingPaydays().filter(p => p.date < nextGold.date), depositAmounts: getUpcomingPaydays().filter(p => p.date < nextGold.date).map(p => ({ date: p.date, type: p.type, amount: p.type === 'mat' ? getPersonalSplits().matPersonalFromMat : getPersonalSplits().matPersonalFromMara })) },
-        });
-      } else {
-        alerts.push({
-          severity: 'critical',
-          message: `Mat's Gold Amex: Statement balance is not paid. Due ${nextGold.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. $${Math.round(goldCheck.shortfall)} short of covering the statement balance.`,
-          details: goldCheck.details,
-          calculation: generateBillPaymentCalculation('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date, goldCheck)
-        });
-      }
-    }
-
-    // Check Blue (LIVE)
-    if (nextBlue) {
-      const blueCheck = calculatePaymentDate('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date);
-      billChecks.push({
-        name: 'Blue Amex',
-        account: 'LIVE',
-        dueDate: nextBlue.date,
-        statement: latestSnapshot.blue_statement,
-        ...blueCheck
-      });
-
-      if (latestSnapshot.blue_statement === 0) {
-        const blueTotal = latestSnapshot.blue_total || 0;
-        if (blueTotal === 0) {
-          positives.push({
-            message: "Blue Amex: Paid in full!",
-            icon: 'check', person: 'live', account: 'blue',
-          });
-        } else {
-          positives.push({
-            message: "Blue Amex: Statement balance is paid off!",
-            icon: 'check', person: 'live', account: 'blue',
-            details: `Total balance: $${blueTotal.toFixed(2)}`,
-          });
-        }
-      } else if (blueCheck.canPay) {
-        positives.push({
-          message: `Blue Amex: On pace to be covered!`,
-          icon: 'trending', person: 'live', account: 'blue',
-          details: blueCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date, blueCheck),
-          disposableData: { accountBalance: latestSnapshot.live, nextPaymentAmount: latestSnapshot.blue_statement, nextDueDate: nextBlue.date, cushion: config.cushion, paydaysBeforeDue: getUpcomingPaydays().filter(p => p.date < nextBlue.date), depositAmounts: getUpcomingPaydays().filter(p => p.date < nextBlue.date).map(p => ({ date: p.date, type: p.type, amount: p.type === 'mat' ? (config.splits.matLive || 984) : (config.splits.maraLive || 656) })) },
-        });
-      } else {
-        alerts.push({
-          severity: 'critical',
-          message: `Blue Amex: Statement balance is not paid. Due ${nextBlue.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. $${Math.round(blueCheck.shortfall)} short of covering the statement balance.`,
-          details: blueCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date, blueCheck)
+          message: `${card.label}: Statement balance is not paid. Due ${nextBill.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. $${Math.round(paymentCheck.shortfall)} short of covering the statement balance.`,
+          details: paymentCheck.details,
+          calculation: generateBillPaymentCalculation(accountType, accountBalance, cardData.statement, nextBill.date, paymentCheck),
         });
       }
     }
 
     // Check Rent (LIVE)
+    const liveBalance = getSnapshotBucket(latestSnapshot, 'live');
     const nextRent = bills.find(b => b.type === 'rent');
     if (nextRent) {
-      const rentCheck = calculatePaymentDate('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date);
+      const rentCheck = calculatePaymentDate('live', liveBalance, config.monthlyBills.rent, nextRent.date);
       billChecks.push({
         name: 'Rent',
         account: 'LIVE',
@@ -2950,15 +3255,22 @@ export default function App() {
           message: `Rent: On pace to be paid by ${nextRent.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}!`,
           icon: 'trending', person: 'live', account: 'rent',
           details: rentCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date, rentCheck),
-          disposableData: { accountBalance: latestSnapshot.live, nextPaymentAmount: config.monthlyBills.rent, nextDueDate: nextRent.date, cushion: config.cushion, paydaysBeforeDue: getUpcomingPaydays().filter(p => p.date < nextRent.date), depositAmounts: getUpcomingPaydays().filter(p => p.date < nextRent.date).map(p => ({ date: p.date, type: p.type, amount: p.type === 'mat' ? (config.splits.matLive || 984) : (config.splits.maraLive || 656) })) },
+          calculation: generateBillPaymentCalculation('live', liveBalance, config.monthlyBills.rent, nextRent.date, rentCheck),
+          disposableData: {
+            accountBalance: liveBalance,
+            nextPaymentAmount: config.monthlyBills.rent,
+            nextDueDate: nextRent.date,
+            cushion: config.cushion,
+            paydaysBeforeDue: upcomingPaydays.filter(p => p.date < nextRent.date),
+            depositAmounts: getDepositsForBucket('live', nextRent.date),
+          },
         });
       } else {
         alerts.push({
           severity: 'critical',
           message: `Rent: $${Math.round(config.monthlyBills.rent).toLocaleString()} due ${nextRent.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. $${Math.round(rentCheck.shortfall)} short of covering rent.`,
           details: rentCheck.details,
-          calculation: generateBillPaymentCalculation('live', latestSnapshot.live, config.monthlyBills.rent, nextRent.date, rentCheck)
+          calculation: generateBillPaymentCalculation('live', liveBalance, config.monthlyBills.rent, nextRent.date, rentCheck),
         });
       }
     }
@@ -2984,9 +3296,9 @@ export default function App() {
       personalPoints += 0;
       alerts.push({
         severity: 'critical',
-        message: `Mat: Safe to Spend: $${Math.round(matDisposable.disposableIncome)}. $${Math.round(Math.abs(matDisposable.disposableIncome))} short of 200+ target.`,
+        message: `${config.person1Name}: Safe to Spend: $${Math.round(matDisposable.disposableIncome)}. $${Math.round(Math.abs(matDisposable.disposableIncome))} short of 200+ target.`,
         details: `Current balance: $${matDisposable.accountBalance.toFixed(2)}, Next payment: $${matDisposable.nextPaymentAmount.toFixed(2)}`,
-        calculation: generateDisposableCalculation(matDisposable, 'Mat'),
+        calculation: generateDisposableCalculation(matDisposable, 'mat'),
         person: 'mat',
         disposableData: matDisposable,
       });
@@ -3002,9 +3314,9 @@ export default function App() {
       personalPoints += 0;
       alerts.push({
         severity: 'critical',
-        message: `Mara: Safe to Spend: $${Math.round(maraDisposable.disposableIncome)}. $${Math.round(Math.abs(maraDisposable.disposableIncome))} short of 200+ target.`,
+        message: `${config.person2Name}: Safe to Spend: $${Math.round(maraDisposable.disposableIncome)}. $${Math.round(Math.abs(maraDisposable.disposableIncome))} short of 200+ target.`,
         details: `Current balance: $${maraDisposable.accountBalance.toFixed(2)}, Next payment: $${maraDisposable.nextPaymentAmount.toFixed(2)}`,
-        calculation: generateDisposableCalculation(maraDisposable, 'Mara'),
+        calculation: generateDisposableCalculation(maraDisposable, 'mara'),
         person: 'mara',
         disposableData: maraDisposable,
       });
@@ -3031,7 +3343,7 @@ export default function App() {
         alerts.push({
           severity: 'warning',
           message: `Budget Health: ${budgetProjection.budgetHealthScore}/100. Projected ${budgetProjection.isOverBudget ? `$${surplusAbs} over budget` : `$${surplusAbs} under budget`}.`,
-          calculation: `Current LIVE balance: $${budgetProjection.details.startingBalance.toFixed(2)}\n+ Projected paychecks: +$${budgetProjection.details.projectedInflows.toFixed(2)}\n${budgetProjection.details.rent > 0 ? `- Rent payment: -$${budgetProjection.details.rent.toFixed(2)}\n` : ''}- Blue Amex payment: -$${budgetProjection.details.blueAmex.toFixed(2)}\n- Remaining expenses (${budgetProjection.details.daysRemaining}d): -$${budgetProjection.details.projectedRemainingExpenses.toFixed(2)}\n- Safety buffer: -$${budgetProjection.details.safetyBuffer.toFixed(2)}\n\n${budgetProjection.isOverBudget ? '✗' : '✓'} Projected surplus: ${budgetProjection.isOverBudget ? '-' : '+'}$${surplusAbs.toFixed(2)}`,
+          calculation: `Current LIVE balance: $${budgetProjection.details.startingBalance.toFixed(2)}\n+ Projected paychecks: +$${budgetProjection.details.projectedInflows.toFixed(2)}\n${budgetProjection.details.rent > 0 ? `- Rent payment: -$${budgetProjection.details.rent.toFixed(2)}\n` : ''}- Credit card payments: -$${budgetProjection.details.liveCardTotal.toFixed(2)}\n- Remaining expenses (${budgetProjection.details.daysRemaining}d): -$${budgetProjection.details.projectedRemainingExpenses.toFixed(2)}\n- Safety buffer: -$${budgetProjection.details.safetyBuffer.toFixed(2)}\n\n${budgetProjection.isOverBudget ? '✗' : '✓'} Projected surplus: ${budgetProjection.isOverBudget ? '-' : '+'}$${surplusAbs.toFixed(2)}`,
         });
       }
     } else {
@@ -3043,38 +3355,25 @@ export default function App() {
     // Check if we can pay off total balance by due date while keeping cushion
     const cardPayoffInfo = [];
 
-    // Check Discover
-    if (nextDiscover) {
-      const maraBalance = latestSnapshot.mara || 0;
-      const discoverTotal = latestSnapshot.discover_total || 0;
-      const canPayOff = (maraBalance - discoverTotal) >= config.cushion;
-      cardPayoffInfo.push({ card: "Mara's Discover", canPayOff, balance: maraBalance, cardTotal: discoverTotal, owner: 'Mara' });
+    for (const card of effectiveCards) {
+      const bill = bills.find(b => b.type === card.card_id);
+      if (!bill) continue;
+      const bucketBalance = getSnapshotBucket(latestSnapshot, card.paid_from_bucket);
+      const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+      const canPayOff = (bucketBalance - cardData.total) >= config.cushion;
+      const ownerLabel = card.paid_from_bucket === 'live' ? 'LIVE' : getBucketDisplayName(card.paid_from_bucket);
+      cardPayoffInfo.push({ card: card.label, canPayOff, balance: bucketBalance, cardTotal: cardData.total, owner: ownerLabel });
     }
 
-    // Check Gold
-    if (nextGold) {
-      const matBalance = latestSnapshot.mat || 0;
-      const goldTotal = latestSnapshot.gold_total || 0;
-      const canPayOff = (matBalance - goldTotal) >= config.cushion;
-      cardPayoffInfo.push({ card: "Mat's Gold Amex", canPayOff, balance: matBalance, cardTotal: goldTotal, owner: 'Mat' });
-    }
-
-    // Check Blue - uses LIVE account
-    if (nextBlue) {
-      const liveBalance = latestSnapshot.live || 0;
-      const blueTotal = latestSnapshot.blue_total || 0;
-      const canPayOff = (liveBalance - blueTotal) >= config.cushion;
-      cardPayoffInfo.push({ card: 'Blue Amex', canPayOff, balance: liveBalance, cardTotal: blueTotal, owner: 'LIVE' });
-    }
-
+    const totalCards = effectiveCards.length;
     const payableCount = cardPayoffInfo.filter(info => info.canPayOff).length;
 
     let promptScore = 0;
-    if (payableCount === 3) {
+    if (totalCards > 0 && payableCount === totalCards) {
       promptScore = 10;
-    } else if (payableCount === 2) {
+    } else if (payableCount >= totalCards * 0.66) {
       promptScore = 6;
-    } else if (payableCount === 1) {
+    } else if (payableCount >= 1) {
       promptScore = 3;
     } else {
       promptScore = 0;
@@ -3082,7 +3381,7 @@ export default function App() {
 
     scoreBreakdown.promptPaymentsScore = promptScore;
     scoreBreakdown.details.promptPayments = payableCount > 0
-      ? `${payableCount} of 3 cards can be paid off in full while keeping $${config.cushion} cushion`
+      ? `${payableCount} of ${totalCards} cards can be paid off in full while keeping $${config.cushion} cushion`
       : `No cards can be paid off in full while keeping $${config.cushion} cushion`;
 
     const totalScore = Math.round(
@@ -3103,10 +3402,7 @@ export default function App() {
     const suggestions = [];
     const bills = getUpcomingBills();
 
-    // Get next credit card bills and check payoff ability
-    const nextDiscover = bills.find(b => b.type === 'discover');
-    const nextGold = bills.find(b => b.type === 'gold');
-    const nextBlue = bills.find(b => b.type === 'blue');
+    const effectiveCards = getEffectiveCreditCards();
 
     // Suggestion for Credit Card Payoffs (max 10 points)
     const promptGap = healthData.scoreBreakdown.promptPaymentsMax - healthData.scoreBreakdown.promptPaymentsScore;
@@ -3114,51 +3410,20 @@ export default function App() {
       let statusItems = [];
       let needsAction = [];
 
-      // Check Discover (Mara)
-      if (nextDiscover) {
-        const maraBalance = latestSnapshot.mara || 0;
-        const discoverTotal = latestSnapshot.discover_total || 0;
-        const afterPayment = maraBalance - discoverTotal;
+      for (const card of effectiveCards) {
+        const bill = bills.find(b => b.type === card.card_id);
+        if (!bill) continue;
+        const bucketBalance = getSnapshotBucket(latestSnapshot, card.paid_from_bucket);
+        const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+        const afterPayment = bucketBalance - cardData.total;
 
-        if (discoverTotal === 0) {
-          statusItems.push(`Mara's Discover: paid in full`);
+        if (cardData.total === 0) {
+          statusItems.push(`${card.label}: paid in full`);
         } else if (afterPayment >= config.cushion) {
-          statusItems.push(`Mara's Discover ($${Math.round(discoverTotal)}): can pay in full`);
+          statusItems.push(`${card.label} ($${Math.round(cardData.total)}): can pay in full`);
         } else {
           const shortfall = config.cushion - afterPayment;
-          needsAction.push(`Mara's Discover: $${Math.round(shortfall)} short of paying $${Math.round(discoverTotal)} total`);
-        }
-      }
-
-      // Check Gold (Mat)
-      if (nextGold) {
-        const matBalance = latestSnapshot.mat || 0;
-        const goldTotal = latestSnapshot.gold_total || 0;
-        const afterPayment = matBalance - goldTotal;
-
-        if (goldTotal === 0) {
-          statusItems.push(`Mat's Gold Amex: paid in full`);
-        } else if (afterPayment >= config.cushion) {
-          statusItems.push(`Mat's Gold Amex ($${Math.round(goldTotal)}): can pay in full`);
-        } else {
-          const shortfall = config.cushion - afterPayment;
-          needsAction.push(`Mat's Gold Amex: $${Math.round(shortfall)} short of paying $${Math.round(goldTotal)} total`);
-        }
-      }
-
-      // Check Blue
-      if (nextBlue) {
-        const liveBalance = latestSnapshot.live || 0;
-        const blueTotal = latestSnapshot.blue_total || 0;
-        const afterPayment = liveBalance - blueTotal;
-
-        if (blueTotal === 0) {
-          statusItems.push(`Blue Amex: paid in full`);
-        } else if (afterPayment >= config.cushion) {
-          statusItems.push(`Blue Amex ($${Math.round(blueTotal)}): can pay in full`);
-        } else {
-          const shortfall = config.cushion - afterPayment;
-          needsAction.push(`Blue Amex: $${Math.round(shortfall)} short of paying $${Math.round(blueTotal)} total`);
+          needsAction.push(`${card.label}: $${Math.round(shortfall)} short of paying $${Math.round(cardData.total)} total`);
         }
       }
 
@@ -3186,24 +3451,14 @@ export default function App() {
       let actionSuggestion = 'Ensure all upcoming bills can be paid on time';
 
       // Check if we can pay the upcoming bills
-      if (nextDiscover) {
-        const discoverCheck = calculatePaymentDate('mara', latestSnapshot.mara, latestSnapshot.discover_statement, nextDiscover.date);
-        if (!discoverCheck.canPay) {
-          actionSuggestion = `Mara's Discover: $${Math.round(discoverCheck.shortfall)} short. Due ${nextDiscover.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`;
-        }
-      }
-
-      if (nextGold) {
-        const goldCheck = calculatePaymentDate('mat', latestSnapshot.mat, latestSnapshot.gold_statement, nextGold.date);
-        if (!goldCheck.canPay) {
-          actionSuggestion = `Mat's Gold Amex: $${Math.round(goldCheck.shortfall)} short. Due ${nextGold.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`;
-        }
-      }
-
-      if (nextBlue) {
-        const blueCheck = calculatePaymentDate('live', latestSnapshot.live, latestSnapshot.blue_statement, nextBlue.date);
-        if (!blueCheck.canPay) {
-          actionSuggestion = `Blue Amex: $${Math.round(blueCheck.shortfall)} short. Due ${nextBlue.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`;
+      for (const card of effectiveCards) {
+        const bill = bills.find(b => b.type === card.card_id);
+        if (!bill) continue;
+        const bucketBalance = getSnapshotBucket(latestSnapshot, card.paid_from_bucket);
+        const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+        const paymentCheck = calculatePaymentDate(card.paid_from_bucket, bucketBalance, cardData.statement, bill.date);
+        if (!paymentCheck.canPay) {
+          actionSuggestion = `${card.label}: $${Math.round(paymentCheck.shortfall)} short. Due ${bill.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}.`;
         }
       }
 
@@ -3226,25 +3481,25 @@ export default function App() {
 
       let statusParts = [];
 
-      // Check Mat's status
+      // Check person 1's status
       if (matDisp) {
         if (matDisp.disposableIncome >= target) {
           const above = Math.round(matDisp.disposableIncome - target);
-          statusParts.push(`Mat: Safe to Spend: $${Math.round(matDisp.disposableIncome)}. $${above} above 200+ target`);
+          statusParts.push(`${config.person1Name}: Safe to Spend: $${Math.round(matDisp.disposableIncome)}. $${above} above 200+ target`);
         } else {
           const needed = Math.round(target - matDisp.disposableIncome);
-          statusParts.push(`Mat: Safe to Spend: $${Math.round(matDisp.disposableIncome)}. $${needed} short of 200+ target`);
+          statusParts.push(`${config.person1Name}: Safe to Spend: $${Math.round(matDisp.disposableIncome)}. $${needed} short of 200+ target`);
         }
       }
 
-      // Check Mara's status
+      // Check person 2's status
       if (maraDisp) {
         if (maraDisp.disposableIncome >= target) {
           const above = Math.round(maraDisp.disposableIncome - target);
-          statusParts.push(`Mara: Safe to Spend: $${Math.round(maraDisp.disposableIncome)}. $${above} above 200+ target`);
+          statusParts.push(`${config.person2Name}: Safe to Spend: $${Math.round(maraDisp.disposableIncome)}. $${above} above 200+ target`);
         } else {
           const needed = Math.round(target - maraDisp.disposableIncome);
-          statusParts.push(`Mara: Safe to Spend: $${Math.round(maraDisp.disposableIncome)}. $${needed} short of 200+ target`);
+          statusParts.push(`${config.person2Name}: Safe to Spend: $${Math.round(maraDisp.disposableIncome)}. $${needed} short of 200+ target`);
         }
       }
 
@@ -3365,44 +3620,44 @@ export default function App() {
       mat: theme.mat, mara: theme.mara,
     };
 
-    // Individual checking account series
+    // Individual checking account series — read from JSONB buckets with fallback
     const accountSeries = {};
     ['give', 'save', 'live', 'mat', 'mara'].forEach(key => {
+      const bucket = key === 'mat' ? 'person1' : key === 'mara' ? 'person2' : key;
       accountSeries[key] = deduped.map(s => ({
         date: formatDate(s.created_at),
-        value: s[key] || 0,
+        value: getSnapshotBucket(s, bucket),
       }));
     });
 
-    // Credit card series — each includes card total, statement, and linked account balance
-    const creditCards = {
-      blue: deduped.map(s => ({
-        date: formatDate(s.created_at),
-        dayOfMonth: new Date(s.created_at).getDate(),
-        cardTotal: s.blue_total || 0,
-        cardStatement: s.blue_statement || 0,
-        accountBalance: s.live || 0,
-      })),
-      gold: deduped.map(s => ({
-        date: formatDate(s.created_at),
-        dayOfMonth: new Date(s.created_at).getDate(),
-        cardTotal: s.gold_total || 0,
-        cardStatement: s.gold_statement || 0,
-        accountBalance: s.mat || 0,
-      })),
-      discover: deduped.map(s => ({
-        date: formatDate(s.created_at),
-        dayOfMonth: new Date(s.created_at).getDate(),
-        cardTotal: s.discover_total || 0,
-        cardStatement: s.discover_statement || 0,
-        accountBalance: s.mara || 0,
-      })),
-    };
+    // Credit card series — built dynamically from creditCards state
+    const effectiveCards = getEffectiveCreditCards();
+    const creditCardSeries = {};
+    for (const card of effectiveCards) {
+      const paidFromBucket = card.paid_from_bucket || 'live';
+      creditCardSeries[card.card_id] = deduped.map(s => {
+        const cardData = getSnapshotCard(s, card.card_id);
+        return {
+          date: formatDate(s.created_at),
+          dayOfMonth: new Date(s.created_at).getDate(),
+          cardTotal: cardData.total || 0,
+          cardStatement: cardData.statement || 0,
+          accountBalance: getSnapshotBucket(s, paidFromBucket),
+        };
+      });
+    }
 
-    // Net position series
+    // Net position series — sum all buckets minus all card totals
     const netPosition = deduped.map(s => {
-      const totalChecking = (s.give || 0) + (s.save || 0) + (s.live || 0) + (s.mat || 0) + (s.mara || 0);
-      const totalCards = (s.blue_total || 0) + (s.gold_total || 0) + (s.discover_total || 0);
+      let totalChecking = 0;
+      for (const bucket of ['give', 'save', 'live', 'person1', 'person2']) {
+        totalChecking += getSnapshotBucket(s, bucket);
+      }
+      let totalCards = 0;
+      for (const card of effectiveCards) {
+        const cardData = getSnapshotCard(s, card.card_id);
+        totalCards += cardData.total || 0;
+      }
       return {
         date: formatDate(s.created_at),
         netPosition: totalChecking - totalCards,
@@ -3411,8 +3666,8 @@ export default function App() {
       };
     });
 
-    return { accountSeries, creditCards, netPosition, colors };
-  }, [snapshots]);
+    return { accountSeries, creditCards: creditCardSeries, netPosition, colors };
+  }, [snapshots, creditCards]);
 
   // Generate weekly report
   const generateWeeklyReport = () => {
@@ -3427,11 +3682,11 @@ export default function App() {
     return {
       period: 'This Week',
       changes: {
-        give: weekEnd.give - weekStart.give,
-        save: weekEnd.save - weekStart.save,
-        live: weekEnd.live - weekStart.live,
-        mat: weekEnd.mat - weekStart.mat,
-        mara: weekEnd.mara - weekStart.mara,
+        give: getSnapshotBucket(weekEnd, 'give') - getSnapshotBucket(weekStart, 'give'),
+        save: getSnapshotBucket(weekEnd, 'save') - getSnapshotBucket(weekStart, 'save'),
+        live: getSnapshotBucket(weekEnd, 'live') - getSnapshotBucket(weekStart, 'live'),
+        mat: getSnapshotBucket(weekEnd, 'person1') - getSnapshotBucket(weekStart, 'person1'),
+        mara: getSnapshotBucket(weekEnd, 'person2') - getSnapshotBucket(weekStart, 'person2'),
       },
       startDate: new Date(weekStart.created_at),
       endDate: new Date(weekEnd.created_at),
@@ -3453,11 +3708,11 @@ export default function App() {
     return {
       period: 'This Month',
       changes: {
-        give: monthEnd.give - monthStart.give,
-        save: monthEnd.save - monthStart.save,
-        live: monthEnd.live - monthStart.live,
-        mat: monthEnd.mat - monthStart.mat,
-        mara: monthEnd.mara - monthStart.mara,
+        give: getSnapshotBucket(monthEnd, 'give') - getSnapshotBucket(monthStart, 'give'),
+        save: getSnapshotBucket(monthEnd, 'save') - getSnapshotBucket(monthStart, 'save'),
+        live: getSnapshotBucket(monthEnd, 'live') - getSnapshotBucket(monthStart, 'live'),
+        mat: getSnapshotBucket(monthEnd, 'person1') - getSnapshotBucket(monthStart, 'person1'),
+        mara: getSnapshotBucket(monthEnd, 'person2') - getSnapshotBucket(monthStart, 'person2'),
       },
       budgetProjection,
       startDate: new Date(monthStart.created_at),
@@ -3899,13 +4154,58 @@ export default function App() {
     );
   }
 
+  // ─── Test mode banner ─────────────────────────────────────────────────────
+  // Fixed bar at the top of the screen so you always know when sandbox is active.
+  const testModeBanner = isTestMode ? (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+      backgroundColor: theme.warning, color: '#000',
+      textAlign: 'center', padding: '4px 0',
+      fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.1em',
+    }}>
+      TEST MODE — Sandbox Data Only
+    </div>
+  ) : null;
+
+  // Show onboarding for first-time users (not yet completed onboarding)
+  if (onboardingComplete === false) {
+    return (
+      <>
+      {testModeBanner}
+      <Onboarding
+        theme={theme}
+        styles={styles}
+        authFetch={authFetch}
+        supabase={supabase}
+        session={session}
+        onComplete={(updates) => {
+          markOnboardingComplete(updates);
+          setOnboardingComplete(true);
+          setConfig(prev => ({
+            ...prev,
+            person1Name: updates.person_1_name,
+            person2Name: updates.person_2_name,
+            isJointBudget: updates.is_joint_budget,
+          }));
+        }}
+        syncBalances={syncBalances}
+        syncTransactions={syncTransactions}
+        fetchConnectedAccounts={fetchConnectedAccounts}
+        fetchPlaidMappings={fetchPlaidMappings}
+        fetchSnapshots={fetchSnapshots}
+      />
+      </>
+    );
+  }
+
   return (
     <div style={styles.container}>
+      {testModeBanner}
       <header style={styles.header}>
         <div style={{ width: 40 }} />
         <div style={{ textAlign: 'center' }}>
           <h1 style={styles.title}>Flip</h1>
-          <p style={styles.subtitle}>Mat & Mara</p>
+          <p style={styles.subtitle}>{config.isJointBudget ? `${config.person1Name} & ${config.person2Name}` : config.person1Name}</p>
         </div>
         <button
           onClick={() => { setMenuOpen(true); setMenuView('menu'); }}
@@ -3939,13 +4239,6 @@ export default function App() {
                   style={styles.menuItem}
                 >
                   Update Card Balances
-                </button>
-                <button
-                  onClick={() => { syncBalances(); setMenuOpen(false); }}
-                  disabled={syncing}
-                  style={{ ...styles.menuItem, color: theme.give }}
-                >
-                  {syncing ? 'Syncing...' : 'Sync Bank Accounts'}
                 </button>
                 <div style={{ height: '1px', backgroundColor: theme.border, margin: '0.5rem 0' }} />
                 <div style={{ padding: '0 1rem', marginBottom: '0.5rem' }}>
@@ -4094,9 +4387,9 @@ export default function App() {
 
                       {/* Plaid Connection — gated behind data access consent */}
                       <div style={{ ...styles.settingsSection, marginTop: '1.5rem' }}>
-                        <h3 style={styles.settingsSectionTitle}>Connected Banks</h3>
+                        <h3 style={styles.settingsSectionTitle}>Connected Accounts</h3>
 
-                        {/* Consent gate: user must agree to data access before connecting banks */}
+                        {/* Consent gate: user must agree to data access before connecting accounts */}
                         {plaidConsent === false && (
                           <div style={{
                             backgroundColor: theme.accentBg, border: `1px solid ${theme.border}`,
@@ -4106,7 +4399,7 @@ export default function App() {
                               Data Access Consent Required
                             </p>
                             <p style={{ color: theme.textMuted, fontSize: '0.8125rem', lineHeight: '1.6', marginBottom: '0.75rem' }}>
-                              To connect your bank accounts, Flip needs your permission to access your financial data through Plaid. Here's what we'll access and how we use it:
+                              To connect your accounts, Flip needs your permission to access your financial data through Plaid. Here's what we'll access and how we use it:
                             </p>
                             <ul style={{ color: theme.textMuted, fontSize: '0.8125rem', lineHeight: '1.6', marginBottom: '0.75rem', paddingLeft: '1.25rem' }}>
                               <li><strong style={{ color: theme.text }}>Account balances</strong> — to track your Give, Save, Live, Mat, and Mara accounts</li>
@@ -4129,34 +4422,18 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* OTP gate: after consent, require fresh email verification before connecting */}
-                        {plaidConsent === true && !plaidOtpVerified && (
-                          <div style={{
-                            backgroundColor: theme.accentBg, border: `1px solid ${theme.border}`,
-                            borderRadius: '0.75rem', padding: '1.25rem', marginBottom: '1rem', textAlign: 'center',
-                          }}>
-                            <p style={{ color: theme.text, fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.5rem' }}>
-                              Email Verification Required
-                            </p>
-                            <p style={{ color: theme.textMuted, fontSize: '0.8125rem', lineHeight: '1.6', marginBottom: '1rem' }}>
-                              For your security, we need to verify your identity before connecting a bank account.
-                              We'll send a one-time code to your email.
-                            </p>
-                            <button
-                              onClick={() => sendEmailOtp('plaid')}
-                              style={{
-                                width: '100%', padding: '0.75rem', backgroundColor: theme.accent,
-                                border: 'none', borderRadius: '0.5rem', color: '#fff',
-                                fontSize: '0.875rem', fontWeight: '600', cursor: 'pointer',
-                              }}
-                            >
-                              Send Verification Code
-                            </button>
-                          </div>
-                        )}
-
-                        {plaidConsent === true && plaidOtpVerified && (
-                          <PlaidLink authFetch={authFetch} onSuccess={(metadata) => { setMessage('Bank connected!'); fetchConnectedAccounts(); setTimeout(() => setMessage(''), 3000); }} />
+                        {plaidConsent === true && (
+                          <PlaidLink authFetch={authFetch} onSuccess={(metadata) => {
+                            setMessage('✅ Account connected! Map your accounts below.');
+                            fetchConnectedAccounts();
+                            // Scroll to mapping section after a brief delay for re-render
+                            setTimeout(() => {
+                              if (mappingRef.current) {
+                                mappingRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }
+                            }, 500);
+                            setTimeout(() => setMessage(''), 5000);
+                          }} />
                         )}
                         {connectedAccounts.length > 0 && (
                           <div style={{ marginTop: '1rem' }}>
@@ -4166,7 +4443,7 @@ export default function App() {
                                   <div>
                                     <span style={{ color: theme.text, fontSize: '0.875rem' }}>{item.institution_name}</span>
                                     <span style={{ fontSize: '0.75rem', color: theme.textDimmed, marginLeft: '0.5rem' }}>
-                                      {item.last_synced ? new Date(item.last_synced).toLocaleDateString() : 'Never synced'}
+                                      {syncing && !item.last_synced ? 'Syncing...' : `Synced ${getRelativeTime(item.last_synced)}`}
                                     </span>
                                   </div>
                                   {disconnectingItem !== item.item_id && (
@@ -4218,8 +4495,40 @@ export default function App() {
                             ))}
                           </div>
                         )}
-                        <AccountMappingUI authFetch={authFetch} />
+                        <div ref={mappingRef}>
+                          <AccountMappingUI
+                            authFetch={authFetch}
+                            onMappingSaved={handleMappingSaved}
+                            isSyncing={syncing}
+                            key={connectedAccounts.length}
+                            person1Name={config.person1Name}
+                            person2Name={config.person2Name}
+                          />
+                        </div>
                       </div>
+
+                      {/* Test Mode Tools — only visible when ?testmode is in the URL on localhost */}
+                      {isTestMode && (
+                        <div style={{
+                          ...styles.settingsSection, marginTop: '1.5rem',
+                          borderTop: `1px solid ${theme.warning}30`,
+                        }}>
+                          <h3 style={{ ...styles.settingsSectionTitle, color: theme.warning }}>Test Mode Tools</h3>
+                          <p style={{ color: theme.textMuted, fontSize: '0.8125rem', marginBottom: '0.75rem', lineHeight: '1.5' }}>
+                            Reset all data (balances, transactions, mappings, config) without deleting your account. You'll see onboarding again.
+                          </p>
+                          <button
+                            onClick={handleTestReset}
+                            style={{
+                              width: '100%', padding: '0.75rem',
+                              backgroundColor: theme.warning, border: 'none', borderRadius: '0.5rem',
+                              color: '#000', fontSize: '0.875rem', fontWeight: '600', cursor: 'pointer',
+                            }}
+                          >
+                            Reset Test Data
+                          </button>
+                        </div>
+                      )}
 
                       {/* Account Deletion — destructive action, gated behind OTP */}
                       <div style={{ ...styles.settingsSection, marginTop: '1.5rem', borderTop: `1px solid ${theme.danger}30` }}>
@@ -4245,7 +4554,7 @@ export default function App() {
                               Are you sure? This cannot be undone.
                             </p>
                             <p style={{ color: theme.textMuted, fontSize: '0.8125rem', lineHeight: '1.6', marginBottom: '1rem' }}>
-                              This will permanently delete your account and all associated data, including connected bank accounts, balance history, budget settings, and consent records. All Plaid access tokens will be revoked.
+                              This will permanently delete your account and all associated data, including connected accounts, balance history, budget settings, and consent records. All Plaid access tokens will be revoked.
                             </p>
                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                               <button
@@ -4483,34 +4792,49 @@ export default function App() {
                 </div>
                 <section style={{ padding: '1rem' }}>
                   <p style={{ ...styles.updateHint, marginBottom: '1rem' }}>Enter your credit card balances and statement amounts.</p>
-                  {[
-                    { totalKey: 'blue_total', statementKey: 'blue_statement', label: 'Blue Amex', due: '8th' },
-                    { totalKey: 'gold_total', statementKey: 'gold_statement', label: "Mat's Gold Amex", due: '15th' },
-                    { totalKey: 'discover_total', statementKey: 'discover_statement', label: "Mara's Discover", due: '2nd' },
-                  ].map(card => (
-                    <div key={card.label} style={styles.cardInputGroup}>
-                      <div style={styles.cardInputHeader}>
-                        <span style={styles.cardInputLabel}>{card.label}</span>
-                        <span style={styles.cardInputDue}>Due: {card.due}</span>
-                      </div>
-                      <div style={styles.cardInputRow}>
-                        <div style={styles.inputRowHalf}>
-                          <label style={styles.inputLabelSmall}>Total Balance</label>
-                          <div style={styles.inputWrapper}>
-                            <span style={styles.inputPrefix}>$</span>
-                            <input type="number" step="0.01" value={balances[card.totalKey]} onChange={(e) => handleInputChange(card.totalKey, e.target.value)} style={styles.input} placeholder="0.00" />
-                          </div>
+                  {getEffectiveCreditCards().map(cardConfig => {
+                    const card = {
+                      totalKey: `${cardConfig.card_id}_total`,
+                      statementKey: `${cardConfig.card_id}_statement`,
+                      label: cardConfig.label,
+                      due: `${cardConfig.due_day}${cardConfig.due_day === 1 ? 'st' : cardConfig.due_day === 2 ? 'nd' : cardConfig.due_day === 3 ? 'rd' : 'th'}`,
+                    };
+                    const isPlaidManaged = plaidMappedTypes.has(card.totalKey) || plaidMappedTypes.has(cardConfig.card_id);
+                    return (
+                      <div key={card.label} style={{ ...styles.cardInputGroup, opacity: isPlaidManaged ? 0.6 : 1 }}>
+                        <div style={styles.cardInputHeader}>
+                          <span style={styles.cardInputLabel}>{card.label}</span>
+                          {isPlaidManaged ? (
+                            <span style={{ fontSize: '0.7rem', color: theme.success, fontWeight: '600' }}>Synced via Plaid</span>
+                          ) : (
+                            <span style={styles.cardInputDue}>Due: {card.due}</span>
+                          )}
                         </div>
-                        <div style={styles.inputRowHalf}>
-                          <label style={styles.inputLabelSmall}>Statement Balance</label>
-                          <div style={styles.inputWrapper}>
-                            <span style={styles.inputPrefix}>$</span>
-                            <input type="number" step="0.01" value={balances[card.statementKey]} onChange={(e) => handleInputChange(card.statementKey, e.target.value)} style={styles.input} placeholder="0.00" />
+                        {isPlaidManaged ? (
+                          <p style={{ color: theme.textMuted, fontSize: '0.8125rem', margin: '0.5rem 0' }}>
+                            This card is connected via Plaid and syncs automatically.
+                          </p>
+                        ) : (
+                          <div style={styles.cardInputRow}>
+                            <div style={styles.inputRowHalf}>
+                              <label style={styles.inputLabelSmall}>Total Balance</label>
+                              <div style={styles.inputWrapper}>
+                                <span style={styles.inputPrefix}>$</span>
+                                <input type="number" step="0.01" value={balances[card.totalKey]} onChange={(e) => handleInputChange(card.totalKey, e.target.value)} style={styles.input} placeholder="0.00" />
+                              </div>
+                            </div>
+                            <div style={styles.inputRowHalf}>
+                              <label style={styles.inputLabelSmall}>Statement Balance</label>
+                              <div style={styles.inputWrapper}>
+                                <span style={styles.inputPrefix}>$</span>
+                                <input type="number" step="0.01" value={balances[card.statementKey]} onChange={(e) => handleInputChange(card.statementKey, e.target.value)} style={styles.input} placeholder="0.00" />
+                              </div>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {message && (
                     <div style={{ ...styles.message, backgroundColor: message.includes('Error') ? '#fef2f2' : '#f0fdf4', color: message.includes('Error') ? '#dc2626' : '#16a34a' }}>
                       {message}
@@ -4864,60 +5188,40 @@ export default function App() {
           {latestSnapshot && (() => {
             const bills = getUpcomingBills();
             const personalSplits = getPersonalSplits();
-            const nextDiscover = bills.find(b => b.type === 'discover');
-            const nextGold = bills.find(b => b.type === 'gold');
-            const nextBlue = bills.find(b => b.type === 'blue');
+            const effectiveCards = getEffectiveCreditCards();
+            const upcomingPaydays = getUpcomingPaydays();
+            const bucketColorMap = { live: theme.live, person1: theme.mat, person2: theme.mara };
 
             const cardProjections = [];
 
-            // Discover (Mara)
-            if (nextDiscover) {
-              const balance = latestSnapshot.mara || 0;
-              const total = latestSnapshot.discover_total || 0;
+            for (const card of effectiveCards) {
+              const nextBill = bills.find(b => b.type === card.card_id);
+              if (!nextBill) continue;
+
+              const paidFromBucket = card.paid_from_bucket || 'live';
+              const balance = getSnapshotBucket(latestSnapshot, paidFromBucket);
+              const cardData = getSnapshotCard(latestSnapshot, card.card_id);
+              const total = cardData.total || 0;
               const score = total === 0 ? 100 : Math.min(100, Math.round((balance / total) * 100));
-              const paydays = getUpcomingPaydays().filter(p => p.date <= nextDiscover.date);
-              const depositAmounts = paydays.map(p => ({
-                date: p.date,
-                type: p.type,
-                amount: p.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara,
-              }));
-              cardProjections.push({
-                card: 'Discover', score, color: theme.mara, total, balance,
-                accountType: 'mara', person: 'mara', dueDate: nextDiscover.date,
-                depositAmounts, paydays,
+              const paydays = upcomingPaydays.filter(p => p.date <= nextBill.date);
+              const depositAmounts = paydays.map(p => {
+                let amount = 0;
+                if (paidFromBucket === 'live') {
+                  amount = p.type === 'mat' ? (config.splits.matLive || 984) : (config.splits.maraLive || 656);
+                } else if (paidFromBucket === 'person1') {
+                  amount = p.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara;
+                } else if (paidFromBucket === 'person2') {
+                  amount = p.type === 'mat' ? personalSplits.maraPersonalFromMat : personalSplits.maraPersonalFromMara;
+                }
+                return { date: p.date, type: p.type, amount };
               });
-            }
-            // Gold (Mat)
-            if (nextGold) {
-              const balance = latestSnapshot.mat || 0;
-              const total = latestSnapshot.gold_total || 0;
-              const score = total === 0 ? 100 : Math.min(100, Math.round((balance / total) * 100));
-              const paydays = getUpcomingPaydays().filter(p => p.date <= nextGold.date);
-              const depositAmounts = paydays.map(p => ({
-                date: p.date,
-                type: p.type,
-                amount: p.type === 'mat' ? personalSplits.matPersonalFromMat : personalSplits.matPersonalFromMara,
-              }));
+
+              const accountType = paidFromBucket === 'person1' ? 'mat' : paidFromBucket === 'person2' ? 'mara' : 'live';
               cardProjections.push({
-                card: 'Gold Amex', score, color: theme.mat, total, balance,
-                accountType: 'mat', person: 'mat', dueDate: nextGold.date,
-                depositAmounts, paydays,
-              });
-            }
-            // Blue (LIVE)
-            if (nextBlue) {
-              const balance = latestSnapshot.live || 0;
-              const total = latestSnapshot.blue_total || 0;
-              const score = total === 0 ? 100 : Math.min(100, Math.round((balance / total) * 100));
-              const paydays = getUpcomingPaydays().filter(p => p.date <= nextBlue.date);
-              const depositAmounts = paydays.map(p => ({
-                date: p.date,
-                type: p.type,
-                amount: p.type === 'mat' ? (config.splits.matLive || 984) : (config.splits.maraLive || 656),
-              }));
-              cardProjections.push({
-                card: 'Blue Amex', score, color: theme.live, total, balance,
-                accountType: 'live', person: 'live', dueDate: nextBlue.date,
+                card: card.label, score,
+                color: bucketColorMap[paidFromBucket] || theme.live,
+                total, balance,
+                accountType, person: accountType, dueDate: nextBill.date,
                 depositAmounts, paydays,
               });
             }
@@ -4991,8 +5295,9 @@ export default function App() {
           <h2 style={styles.sectionTitle}>Checking Accounts</h2>
           <div style={styles.accountListCard}>
             {latestSnapshot && ['give', 'save', 'live', 'mat', 'mara'].map(key => {
-              const labels = { give: 'Give', save: 'Save', live: 'Live', mat: 'Mat', mara: 'Mara' };
+              const labels = { give: 'Give', save: 'Save', live: 'Live', mat: config.person1Name, mara: config.person2Name };
               const colors = { give: theme.give, save: theme.save, live: theme.live, mat: theme.mat, mara: theme.mara };
+              const bucket = key === 'mat' ? 'person1' : key === 'mara' ? 'person2' : key;
               return (
                 <button
                   key={key}
@@ -5005,7 +5310,7 @@ export default function App() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <span style={{ color: theme.text, fontWeight: '600' }}>
-                      ${(latestSnapshot[key] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ${(getSnapshotBucket(latestSnapshot, bucket) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
                     <span style={{ color: theme.textDimmed, fontSize: '1rem' }}>&#8250;</span>
                   </div>
@@ -5017,11 +5322,14 @@ export default function App() {
           {/* Credit Cards */}
           <h2 style={{ ...styles.sectionTitle, marginTop: '1.5rem' }}>Credit Cards</h2>
           <div style={styles.accountListCard}>
-            {latestSnapshot && [
-              { key: 'blue', label: 'Blue Amex', color: theme.live, totalKey: 'blue_total' },
-              { key: 'gold', label: 'Gold Amex', color: theme.mat, totalKey: 'gold_total' },
-              { key: 'discover', label: 'Discover', color: theme.mara, totalKey: 'discover_total' },
-            ].map(card => (
+            {latestSnapshot && getEffectiveCreditCards().map(cardConfig => {
+              const acctBucketColors = { live: theme.live, person1: theme.mat, person2: theme.mara };
+              const card = {
+                key: cardConfig.card_id,
+                label: cardConfig.label,
+                color: acctBucketColors[cardConfig.paid_from_bucket] || theme.live,
+              };
+              return (
               <button
                 key={card.key}
                 onClick={() => setSelectedAccount({ key: card.key, type: 'credit', label: card.label, color: card.color })}
@@ -5033,12 +5341,13 @@ export default function App() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{ color: theme.danger, fontWeight: '600' }}>
-                    ${(latestSnapshot[card.totalKey] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    ${(getSnapshotCard(latestSnapshot, card.key)?.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </span>
                   <span style={{ color: theme.textDimmed, fontSize: '1rem' }}>&#8250;</span>
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </main>
       )}
@@ -5056,21 +5365,15 @@ export default function App() {
               const year = calendarYear;
               const month = calendarMonth;
 
-              // Bills for this month
-              // Discover 2nd
-              const discoverDate = new Date(year, month, config.dueDates?.discover || 2);
-              const discoverPaid = (latestSnapshot?.discover_statement || 0) === 0;
-              events.push({ date: discoverDate, name: "Discover", amount: latestSnapshot?.discover_statement || 0, type: 'bill', paid: discoverPaid, color: theme.mara });
-
-              // Blue 8th
-              const blueDate = new Date(year, month, config.dueDates?.blue || 8);
-              const bluePaid = (latestSnapshot?.blue_statement || 0) === 0;
-              events.push({ date: blueDate, name: "Blue Amex", amount: latestSnapshot?.blue_statement || 0, type: 'bill', paid: bluePaid, color: theme.live });
-
-              // Gold 15th
-              const goldDate = new Date(year, month, config.dueDates?.gold || 15);
-              const goldPaid = (latestSnapshot?.gold_statement || 0) === 0;
-              events.push({ date: goldDate, name: "Gold Amex", amount: latestSnapshot?.gold_statement || 0, type: 'bill', paid: goldPaid, color: theme.mat });
+              // Bills for this month — dynamically from credit cards
+              const calendarBucketColors = { live: theme.live, person1: theme.mat, person2: theme.mara };
+              for (const card of getEffectiveCreditCards()) {
+                const cardDate = new Date(year, month, card.due_day);
+                const cardData = latestSnapshot ? getSnapshotCard(latestSnapshot, card.card_id) : { statement: 0 };
+                const cardPaid = (cardData.statement || 0) === 0;
+                const cardColor = calendarBucketColors[card.paid_from_bucket] || theme.live;
+                events.push({ date: cardDate, name: card.label, amount: cardData.statement || 0, type: 'bill', paid: cardPaid, color: cardColor });
+              }
 
               // Rent last day
               const lastDay = new Date(year, month + 1, 0).getDate();
@@ -5255,6 +5558,118 @@ export default function App() {
         </main>
       )}
 
+      {/* Transactions Tab */}
+      {currentView === 'transactions' && (
+        <main style={styles.main}>
+          {/* Header with last synced */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem' }}>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: '600', color: theme.text, margin: 0 }}>Transactions</h2>
+            <span style={{ fontSize: '0.75rem', color: theme.textDimmed }}>
+              {(() => {
+                const latest = connectedAccounts.reduce((max, item) =>
+                  item.last_synced && (!max || new Date(item.last_synced) > new Date(max)) ? item.last_synced : max
+                , null);
+                return `Synced ${getRelativeTime(latest)}`;
+              })()}
+            </span>
+          </div>
+
+          {/* Filter Bar */}
+          <div style={styles.filterBar}>
+            <select
+              value={transactionsFilter.account_type}
+              onChange={(e) => {
+                const newFilter = { account_type: e.target.value, limit: 50, offset: 0 };
+                setTransactionsFilter(newFilter);
+                fetchTransactions(newFilter);
+              }}
+              style={styles.filterSelect}
+            >
+              <option value="">All Accounts</option>
+              <option value="give">Give</option>
+              <option value="save">Save</option>
+              <option value="live">Live</option>
+              <option value="mat">Mat</option>
+              <option value="mara">Mara</option>
+              <option value="blue_total">Blue Amex</option>
+              <option value="gold_total">Gold Amex</option>
+              <option value="discover_total">Discover</option>
+            </select>
+          </div>
+
+          {/* Transaction List */}
+          <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '5rem' }}>
+            {transactionsLoading && transactions.length === 0 ? (
+              <p style={{ textAlign: 'center', color: theme.textMuted, padding: '2rem' }}>Loading transactions...</p>
+            ) : transactions.length === 0 ? (
+              <p style={{ textAlign: 'center', color: theme.textMuted, padding: '2rem' }}>No transactions yet. Tap Sync to fetch from Plaid.</p>
+            ) : (
+              <>
+                {Object.entries(
+                  transactions.reduce((groups, txn) => {
+                    const d = txn.date;
+                    if (!groups[d]) groups[d] = [];
+                    groups[d].push(txn);
+                    return groups;
+                  }, {})
+                ).map(([date, txns]) => (
+                  <div key={date}>
+                    <div style={styles.transactionDateHeader}>
+                      {new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </div>
+                    {txns.map((txn) => {
+                      const bucket = ACCOUNT_BUCKET_MAP[txn.app_account_type] || ACCOUNT_BUCKET_MAP.unmapped;
+                      const isIncome = txn.amount < 0;
+                      return (
+                        <div key={txn.plaid_transaction_id || txn.id} style={styles.transactionRow}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ color: theme.text, fontSize: '0.875rem', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {txn.merchant_name || txn.name}
+                            </div>
+                            <span style={{ ...styles.accountTag, color: bucket.color, border: `1px solid ${bucket.color}` }}>
+                              {bucket.label}
+                            </span>
+                          </div>
+                          <span style={{ ...styles.transactionAmount, color: isIncome ? theme.success : theme.danger, marginLeft: '0.75rem', whiteSpace: 'nowrap' }}>
+                            {isIncome ? '+' : '-'}${Math.abs(txn.amount).toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+
+                {/* Load More */}
+                {transactions.length < transactionsTotal && (
+                  <div style={{ textAlign: 'center', padding: '1rem' }}>
+                    <button
+                      onClick={() => {
+                        const newFilter = { ...transactionsFilter, offset: transactions.length };
+                        setTransactionsFilter(newFilter);
+                        fetchTransactions(newFilter);
+                      }}
+                      disabled={transactionsLoading}
+                      style={{
+                        padding: '0.5rem 1.5rem',
+                        backgroundColor: theme.cardBg,
+                        color: theme.accent,
+                        border: `1px solid ${theme.accent}`,
+                        borderRadius: '0.5rem',
+                        fontSize: '0.8125rem',
+                        fontWeight: '600',
+                        cursor: transactionsLoading ? 'default' : 'pointer',
+                      }}
+                    >
+                      {transactionsLoading ? 'Loading...' : `Load More (${transactions.length} of ${transactionsTotal})`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </main>
+      )}
+
       {/* Account Detail Slide-in */}
       {selectedAccount && (
         <div style={styles.slideOverlay} onClick={() => setSelectedAccount(null)}>
@@ -5272,8 +5687,8 @@ export default function App() {
               <span style={{ fontSize: '2rem', fontWeight: '700', color: theme.text }}>
                 {latestSnapshot && (
                   selectedAccount.type === 'checking'
-                    ? '$' + (latestSnapshot[selectedAccount.key] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })
-                    : '$' + (latestSnapshot[selectedAccount.key + '_total'] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })
+                    ? '$' + (getSnapshotBucket(latestSnapshot, selectedAccount.key === 'mat' ? 'person1' : selectedAccount.key === 'mara' ? 'person2' : selectedAccount.key) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })
+                    : '$' + (getSnapshotCard(latestSnapshot, selectedAccount.key)?.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })
                 )}
               </span>
               <p style={{ color: theme.textDimmed, fontSize: '0.8125rem', marginTop: '0.25rem' }}>
@@ -5292,12 +5707,18 @@ export default function App() {
                 />
               )}
               {selectedAccount.type === 'credit' && (() => {
-                const cardConfigs = {
-                  blue: { cardColor: theme.live, accountColor: theme.live, accountName: 'LIVE', dueDay: config.dueDates.blue, stmtDay: config.statementCloseDates.blue },
-                  gold: { cardColor: theme.mat, accountColor: theme.mat, accountName: 'MAT', dueDay: config.dueDates.gold, stmtDay: config.statementCloseDates.gold },
-                  discover: { cardColor: theme.mara, accountColor: theme.mara, accountName: 'MARA', dueDay: config.dueDates.discover, stmtDay: config.statementCloseDates.discover },
+                // Build card config dynamically from creditCards state
+                const chartBucketColors = { live: theme.live, person1: theme.mat, person2: theme.mara };
+                const chartBucketNames = { live: 'LIVE', person1: config.person1Name?.toUpperCase() || 'PERSON 1', person2: config.person2Name?.toUpperCase() || 'PERSON 2' };
+                const cardConfig = getEffectiveCreditCards().find(c => c.card_id === selectedAccount.key);
+                const paidFrom = cardConfig?.paid_from_bucket || 'live';
+                const cfg = {
+                  cardColor: chartBucketColors[paidFrom] || theme.live,
+                  accountColor: chartBucketColors[paidFrom] || theme.live,
+                  accountName: chartBucketNames[paidFrom] || 'LIVE',
+                  dueDay: cardConfig?.due_day || config.dueDates?.[selectedAccount.key] || 1,
+                  stmtDay: cardConfig?.statement_close_day || config.statementCloseDates?.[selectedAccount.key] || 1,
                 };
-                const cfg = cardConfigs[selectedAccount.key];
                 return (
                   <CreditCardChart
                     data={chartData?.creditCards[selectedAccount.key] || []}
@@ -5324,7 +5745,7 @@ export default function App() {
               <button onClick={() => setActivePopup(null)} style={styles.menuBackButton}>Back</button>
               <h2 style={{ fontSize: '1.125rem', fontWeight: '600', color: theme.text, margin: 0 }}>
                 {activePopup.type === 'safeToSpend'
-                  ? `${activePopup.person === 'mat' ? 'Mat' : 'Mara'}: Safe to Spend`
+                  ? `${activePopup.person === 'mat' ? config.person1Name : config.person2Name}: Safe to Spend`
                   : activePopup.type === 'positiveDetail' ? 'Looking Good'
                   : activePopup.type === 'budgetHealth' ? 'Budget Health'
                   : activePopup.type === 'tbbDetail' ? `${activePopup.card?.card || 'Card'} Payoff`
@@ -5355,6 +5776,8 @@ export default function App() {
                   person={activePopup.person}
                   config={config}
                   theme={theme}
+                  person1Name={config.person1Name}
+                  person2Name={config.person2Name}
                 />
 
                 {/* Collapsible calculation details */}
@@ -5406,6 +5829,8 @@ export default function App() {
                     person={activePopup.positive.person}
                     config={config}
                     theme={theme}
+                    person1Name={config.person1Name}
+                    person2Name={config.person2Name}
                   />
                 )}
                 {/* Collapsible calculation */}
@@ -5473,6 +5898,8 @@ export default function App() {
                   config={config}
                   latestSnapshot={latestSnapshot}
                   theme={theme}
+                  person1Name={config.person1Name}
+                  person2Name={config.person2Name}
                 />
 
                 {/* Collapsible calculation details */}
@@ -5499,10 +5926,10 @@ export default function App() {
                           <span style={{ fontWeight: '600' }}>-${activePopup.data.details.rent.toFixed(2)}</span>
                         </div>
                       )}
-                      {activePopup.data.details.blueAmex > 0 && (
+                      {activePopup.data.details.liveCardTotal > 0 && (
                         <div style={styles.calculationRow}>
-                          <span>- Blue Amex payment</span>
-                          <span style={{ fontWeight: '600' }}>-${activePopup.data.details.blueAmex.toFixed(2)}</span>
+                          <span>- Credit card payments</span>
+                          <span style={{ fontWeight: '600' }}>-${activePopup.data.details.liveCardTotal.toFixed(2)}</span>
                         </div>
                       )}
                       <div style={styles.calculationRow}>
@@ -5651,6 +6078,8 @@ export default function App() {
                     person={cp.person}
                     config={config}
                     theme={theme}
+                    person1Name={config.person1Name}
+                    person2Name={config.person2Name}
                   />
 
                   {/* Calculation details */}
@@ -5675,7 +6104,7 @@ export default function App() {
                         )}
                         {cp.depositAmounts.map((d, i) => (
                           <div key={i} style={{ ...styles.calculationRow, paddingLeft: '1.5rem', color: theme.textMuted, fontStyle: 'italic' }}>
-                            <span>{d.date.toLocaleDateString()} ({d.type === 'mat' ? 'Mat' : 'Mara'})</span>
+                            <span>{d.date.toLocaleDateString()} ({d.type === 'mat' ? config.person1Name : config.person2Name})</span>
                             <span>+${d.amount.toFixed(2)}</span>
                           </div>
                         ))}
@@ -5740,6 +6169,23 @@ export default function App() {
             <line x1="2" y1="10" x2="22" y2="10"></line>
           </svg>
           <span>Accounts</span>
+        </button>
+        <button
+          onClick={() => setCurrentView('transactions')}
+          style={{
+            ...styles.bottomNavButton,
+            color: currentView === 'transactions' ? theme.accent : theme.textDimmed,
+          }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+          <span>Activity</span>
         </button>
         <button
           onClick={() => { setCurrentView('calendar'); setCalendarTooltip(null); }}
