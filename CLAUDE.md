@@ -484,6 +484,14 @@ User-defined credit cards with due dates and which bucket pays them.
 - `POST /api/consent` — Record consent (privacy_policy, plaid_data_access, terms_of_service)
 - `DELETE /api/account` (strict limit) — Full account deletion with Plaid revocation
 
+### Transaction Analysis
+- `POST /api/analyze-transactions` — Analyzes stored transactions to detect income streams and recurring bills
+  - No request body needed (uses authenticated user's transactions from past 2 years)
+  - Response: `{ income: [{ id, label, amount, frequency, anchorDate, confidence, occurrences }], bills: [{ id, name, amount, dueDay, isVariable, confidence, mappedBillKey, occurrences }] }`
+  - Income: clusters deposits (negative Plaid amounts) by ±5% amount tolerance, returns top 2 streams
+  - Bills: groups outgoing charges by merchant name, keeps monthly-ish (20–40 day intervals), deduplicates by `mappedBillKey`
+  - Called during onboarding Step 11 so the user can confirm what was auto-detected
+
 ### Test Mode
 - `POST /api/test-reset` — Wipes all 8 user data tables without deleting auth account (test mode only, localhost only)
 

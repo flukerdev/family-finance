@@ -29,14 +29,21 @@ const isTestMode = typeof window !== 'undefined'
 const authFetch = async (url, options = {}) => {
   const { data: { session: s } } = await supabase.auth.getSession();
   const token = s?.access_token;
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(isTestMode ? { 'X-Test-Mode': 'true' } : {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...options.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(isTestMode ? { 'X-Test-Mode': 'true' } : {}),
+      },
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 // ─── Ink Wash Theme System ───────────────────────────────────────────────────
@@ -1689,10 +1696,15 @@ const DEFAULT_CONFIG = {
     power: 120,
     groceries: 500, // 125 * 4 weeks
     gas: 270, // 67.5 * 4 weeks
+    subscriptions: 0,
   },
   person1Name: 'Mat',
   person2Name: 'Mara',
   isJointBudget: true,
+  payday1Anchor: null,
+  payday1Frequency: 'biweekly',
+  payday2Anchor: null,
+  payday2Frequency: 'biweekly',
 };
 
 export default function App() {
@@ -2089,11 +2101,16 @@ export default function App() {
           power: parseFloat(dbConfig.monthly_power),
           groceries: parseFloat(dbConfig.monthly_groceries),
           gas: parseFloat(dbConfig.monthly_gas),
+          subscriptions: parseFloat(dbConfig.monthly_subscriptions) || 0,
         }
       };
       loadedConfig.person1Name = dbConfig.person_1_name || 'Person 1';
       loadedConfig.person2Name = dbConfig.person_2_name || 'Person 2';
       loadedConfig.isJointBudget = !!dbConfig.is_joint_budget;
+      loadedConfig.payday1Anchor = dbConfig.payday_1_anchor || null;
+      loadedConfig.payday1Frequency = dbConfig.payday_1_frequency || 'biweekly';
+      loadedConfig.payday2Anchor = dbConfig.payday_2_anchor || null;
+      loadedConfig.payday2Frequency = dbConfig.payday_2_frequency || 'biweekly';
       setConfig(loadedConfig);
       setOnboardingComplete(!!dbConfig.onboarding_complete);
     } else {
@@ -2143,18 +2160,37 @@ export default function App() {
     }
   };
 
-  // Mark onboarding as complete and save person names to app_config
+  // Mark onboarding as complete and save all financial config discovered during onboarding
   const markOnboardingComplete = async (configUpdates) => {
-    const { person_1_name, person_2_name, is_joint_budget } = configUpdates;
+    const upsertData = {
+      user_id: session.user.id,
+      onboarding_complete: true,
+      person_1_name: configUpdates.person_1_name,
+      person_2_name: configUpdates.person_2_name,
+      is_joint_budget: configUpdates.is_joint_budget,
+    };
+    // Only include financial fields if they were provided (non-null)
+    if (configUpdates.mat_pay_amount != null) upsertData.mat_pay_amount = configUpdates.mat_pay_amount;
+    if (configUpdates.mara_pay_amount != null) upsertData.mara_pay_amount = configUpdates.mara_pay_amount;
+    if (configUpdates.payday_1_anchor != null) upsertData.payday_1_anchor = configUpdates.payday_1_anchor;
+    if (configUpdates.payday_1_frequency != null) upsertData.payday_1_frequency = configUpdates.payday_1_frequency;
+    if (configUpdates.payday_2_anchor != null) upsertData.payday_2_anchor = configUpdates.payday_2_anchor;
+    if (configUpdates.payday_2_frequency != null) upsertData.payday_2_frequency = configUpdates.payday_2_frequency;
+    if (configUpdates.split_give != null) upsertData.split_give = configUpdates.split_give;
+    if (configUpdates.split_save != null) upsertData.split_save = configUpdates.split_save;
+    if (configUpdates.split_mat_live != null) upsertData.split_mat_live = configUpdates.split_mat_live;
+    if (configUpdates.split_mara_live != null) upsertData.split_mara_live = configUpdates.split_mara_live;
+    if (configUpdates.monthly_rent != null) upsertData.monthly_rent = configUpdates.monthly_rent;
+    if (configUpdates.monthly_gym != null) upsertData.monthly_gym = configUpdates.monthly_gym;
+    if (configUpdates.monthly_power != null) upsertData.monthly_power = configUpdates.monthly_power;
+    if (configUpdates.monthly_insurance != null) upsertData.monthly_insurance = configUpdates.monthly_insurance;
+    if (configUpdates.monthly_groceries != null) upsertData.monthly_groceries = configUpdates.monthly_groceries;
+    if (configUpdates.monthly_gas != null) upsertData.monthly_gas = configUpdates.monthly_gas;
+    if (configUpdates.monthly_date_nights != null) upsertData.monthly_date_nights = configUpdates.monthly_date_nights;
+    if (configUpdates.monthly_subscriptions != null) upsertData.monthly_subscriptions = configUpdates.monthly_subscriptions;
     const { error } = await supabase
       .from('app_config')
-      .upsert({
-        user_id: session.user.id,
-        onboarding_complete: true,
-        person_1_name,
-        person_2_name,
-        is_joint_budget,
-      }, { onConflict: 'user_id' });
+      .upsert(upsertData, { onConflict: 'user_id' });
     if (error) console.error('Error marking onboarding complete:', error);
   };
 
@@ -2280,7 +2316,7 @@ export default function App() {
 
       if (data.success) {
         if (!silent) setMessage('✅ Balances synced successfully!');
-        await fetchSnapshots(); // Refresh the dashboard
+        await fetchSnapshots(true); // silent — don't flash loading spinner during sync
       } else {
         if (!silent) setMessage('❌ ' + (data.message || 'Failed to sync balances'));
       }
@@ -2401,16 +2437,19 @@ export default function App() {
   // Fetch latest snapshot and config on load, auto-sync with Plaid
   useEffect(() => {
     const init = async () => {
-      await fetchConfig();
-      await fetchConnectedAccounts();
-      await checkPlaidConsent();
-      await fetchPlaidMappings();
-      await fetchCreditCards();
-      // Auto-sync: silently pull latest Plaid balances (rate-limited server-side to 1hr)
-      await syncBalances(true);
-      // fetchSnapshots is already called inside syncBalances, but call it as fallback
-      // in case sync fails (e.g. server not running)
-      await fetchSnapshots();
+      try {
+        await fetchConfig();
+        await fetchConnectedAccounts();
+        await checkPlaidConsent();
+        await fetchPlaidMappings();
+        await fetchCreditCards();
+        await syncBalances(true);
+      } catch (e) {
+        console.error('Init error:', e);
+      } finally {
+        // Always fetch snapshots to clear the loading spinner — even if backend is unreachable
+        await fetchSnapshots();
+      }
     };
     init();
   }, []);
@@ -2479,41 +2518,44 @@ export default function App() {
     };
   };
 
-  const fetchSnapshots = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('balance_snapshots')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(365);
+  const fetchSnapshots = async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('balance_snapshots')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(365);
 
-    if (error) {
-      console.error('Error fetching snapshots:', error);
-      setMessage('Error loading data. Check your Supabase connection.');
-    } else if (data && data.length > 0) {
-      setLatestSnapshot(data[0]);
-      setSnapshots(data);
-      // Populate balances state from JSONB columns with fallback to old columns
-      const latest = data[0];
-      const b = latest.buckets || {};
-      const newBalances = {
-        give: (b.give ?? latest.give ?? 0).toString(),
-        save: (b.save ?? latest.save ?? 0).toString(),
-        live: (b.live ?? latest.live ?? 0).toString(),
-        mat: (b.person1 ?? latest.mat ?? 0).toString(),
-        mara: (b.person2 ?? latest.mara ?? 0).toString(),
-      };
-      // Add card balances dynamically from creditCards state, with fallback to old columns
-      (creditCards.length > 0 ? creditCards : [
-        { card_id: 'blue' }, { card_id: 'gold' }, { card_id: 'discover' }
-      ]).forEach(card => {
-        const cardData = getSnapshotCard(latest, card.card_id);
-        newBalances[`${card.card_id}_total`] = (cardData.total ?? 0).toString();
-        newBalances[`${card.card_id}_statement`] = (cardData.statement ?? 0).toString();
-      });
-      setBalances(newBalances);
+      if (error) {
+        console.error('Error fetching snapshots:', error);
+        setMessage('Error loading data. Check your Supabase connection.');
+      } else if (data && data.length > 0) {
+        setLatestSnapshot(data[0]);
+        setSnapshots(data);
+        const latest = data[0];
+        const b = latest.buckets || {};
+        const newBalances = {
+          give: (b.give ?? latest.give ?? 0).toString(),
+          save: (b.save ?? latest.save ?? 0).toString(),
+          live: (b.live ?? latest.live ?? 0).toString(),
+          mat: (b.person1 ?? latest.mat ?? 0).toString(),
+          mara: (b.person2 ?? latest.mara ?? 0).toString(),
+        };
+        (creditCards.length > 0 ? creditCards : [
+          { card_id: 'blue' }, { card_id: 'gold' }, { card_id: 'discover' }
+        ]).forEach(card => {
+          const cardData = getSnapshotCard(latest, card.card_id);
+          newBalances[`${card.card_id}_total`] = (cardData.total ?? 0).toString();
+          newBalances[`${card.card_id}_statement`] = (cardData.statement ?? 0).toString();
+        });
+        setBalances(newBalances);
+      }
+    } catch (e) {
+      console.error('Error fetching snapshots:', e);
+    } finally {
+      if (!silent) setLoading(false);
     }
-    setLoading(false);
   };
 
   const saveSnapshot = async () => {
@@ -2581,35 +2623,39 @@ export default function App() {
     setBalances(prev => ({ ...prev, [field]: value }));
   };
 
-  // Get upcoming paydays
+  // Get upcoming paydays — driven by payday anchor/frequency from config (set during onboarding).
+  // Falls back to hardcoded 2026 dates for existing users who onboarded before this feature.
   const getUpcomingPaydays = () => {
     const today = new Date();
     const paydays = [];
-    
-    // Mara's next payday: 1/23/2026, then every 2 weeks
-    let maraNext = new Date(2026, 0, 23);
-    while (maraNext < today) {
-      maraNext.setDate(maraNext.getDate() + 14);
-    }
-    
-    // Mat's next payday: 1/30/2026, then every 2 weeks
-    let matNext = new Date(2026, 0, 30);
-    while (matNext < today) {
-      matNext.setDate(matNext.getDate() + 14);
-    }
 
-    // Get next 4 paydays
-    for (let i = 0; i < 4; i++) {
-      if (maraNext <= matNext) {
-        paydays.push({ date: new Date(maraNext), type: 'mara', amount: config.maraPayAmount });
-        maraNext.setDate(maraNext.getDate() + 14);
-      } else {
-        paydays.push({ date: new Date(matNext), type: 'mat', amount: config.matPayAmount });
-        matNext.setDate(matNext.getDate() + 14);
+    const generateFromAnchor = (anchorStr, frequency, amount, person) => {
+      const stepDays = frequency === 'weekly' ? 7
+        : frequency === 'biweekly' ? 14
+        : frequency === 'monthly' ? 30
+        : 14;
+      const anchor = new Date(anchorStr);
+      let next = new Date(anchor);
+      while (next < today) next.setDate(next.getDate() + stepDays);
+      const results = [];
+      for (let i = 0; i < 4; i++) {
+        results.push({ date: new Date(next), type: person, amount });
+        next.setDate(next.getDate() + stepDays);
       }
+      return results;
+    };
+
+    // Person 1 — use configured anchor or fall back to Mat's hardcoded 2026 date
+    const anchor1 = config.payday1Anchor || '2026-01-30';
+    paydays.push(...generateFromAnchor(anchor1, config.payday1Frequency || 'biweekly', config.matPayAmount, 'mat'));
+
+    // Person 2 — only if joint budget
+    if (config.isJointBudget) {
+      const anchor2 = config.payday2Anchor || '2026-01-23';
+      paydays.push(...generateFromAnchor(anchor2, config.payday2Frequency || 'biweekly', config.maraPayAmount, 'mara'));
     }
 
-    return paydays.sort((a, b) => a.date - b.date);
+    return paydays.sort((a, b) => a.date - b.date).slice(0, config.isJointBudget ? 6 : 4);
   };
 
   // Build the effective credit cards list: use creditCards from DB if available,
@@ -3072,7 +3118,7 @@ export default function App() {
     const monthProgress = dayOfMonth / daysInMonth;
 
     // Calculate how much of monthly budget should be spent so far
-    const monthlyVariableExpenses = config.monthlyBills.groceries + config.monthlyBills.gas + config.monthlyBills.dateNights + config.monthlyBills.power + config.monthlyBills.gym + config.monthlyBills.insurance;
+    const monthlyVariableExpenses = config.monthlyBills.groceries + config.monthlyBills.gas + config.monthlyBills.dateNights + config.monthlyBills.power + config.monthlyBills.gym + config.monthlyBills.insurance + (config.monthlyBills.subscriptions || 0);
     const projectedRemainingExpenses = monthlyVariableExpenses * (1 - monthProgress);
 
     projectedLive -= projectedRemainingExpenses;
@@ -3284,7 +3330,7 @@ export default function App() {
     // SCORING: 10 points for personal account health (based on safe-to-spend)
     let personalPoints = 0;
     const matDisposable = calculateDisposableIncome('mat');
-    const maraDisposable = calculateDisposableIncome('mara');
+    const maraDisposable = config.isJointBudget ? calculateDisposableIncome('mara') : null;
 
     // Mat's safe-to-spend scoring (max 5 points)
     if (matDisposable && matDisposable.disposableIncome > 0) {
@@ -3304,26 +3350,30 @@ export default function App() {
       });
     }
 
-    // Mara's safe-to-spend scoring (max 5 points)
-    if (maraDisposable && maraDisposable.disposableIncome > 0) {
-      if (maraDisposable.disposableIncome >= 200) personalPoints += 5;
-      else if (maraDisposable.disposableIncome >= 100) personalPoints += 4;
-      else if (maraDisposable.disposableIncome >= 50) personalPoints += 2.5;
-      else personalPoints += 1.5;
-    } else if (maraDisposable && maraDisposable.disposableIncome < 0) {
-      personalPoints += 0;
-      alerts.push({
-        severity: 'critical',
-        message: `${config.person2Name}: Safe to Spend: $${Math.round(maraDisposable.disposableIncome)}. $${Math.round(Math.abs(maraDisposable.disposableIncome))} short of 200+ target.`,
-        details: `Current balance: $${maraDisposable.accountBalance.toFixed(2)}, Next payment: $${maraDisposable.nextPaymentAmount.toFixed(2)}`,
-        calculation: generateDisposableCalculation(maraDisposable, 'mara'),
-        person: 'mara',
-        disposableData: maraDisposable,
-      });
+    // Mara's safe-to-spend scoring (max 5 points) — joint budget only
+    if (config.isJointBudget) {
+      if (maraDisposable && maraDisposable.disposableIncome > 0) {
+        if (maraDisposable.disposableIncome >= 200) personalPoints += 5;
+        else if (maraDisposable.disposableIncome >= 100) personalPoints += 4;
+        else if (maraDisposable.disposableIncome >= 50) personalPoints += 2.5;
+        else personalPoints += 1.5;
+      } else if (maraDisposable && maraDisposable.disposableIncome < 0) {
+        personalPoints += 0;
+        alerts.push({
+          severity: 'critical',
+          message: `${config.person2Name}: Safe to Spend: $${Math.round(maraDisposable.disposableIncome)}. $${Math.round(Math.abs(maraDisposable.disposableIncome))} short of 200+ target.`,
+          details: `Current balance: $${maraDisposable.accountBalance.toFixed(2)}, Next payment: $${maraDisposable.nextPaymentAmount.toFixed(2)}`,
+          calculation: generateDisposableCalculation(maraDisposable, 'mara'),
+          person: 'mara',
+          disposableData: maraDisposable,
+        });
+      }
     }
 
     scoreBreakdown.personalScore = personalPoints;
-    scoreBreakdown.details.personal = `Mat: $${matDisposable ? Math.round(matDisposable.disposableIncome) : 'N/A'}, Mara: $${maraDisposable ? Math.round(maraDisposable.disposableIncome) : 'N/A'}`;
+    scoreBreakdown.details.personal = config.isJointBudget
+      ? `${config.person1Name}: $${matDisposable ? Math.round(matDisposable.disposableIncome) : 'N/A'}, ${config.person2Name}: $${maraDisposable ? Math.round(maraDisposable.disposableIncome) : 'N/A'}`
+      : `${config.person1Name}: $${matDisposable ? Math.round(matDisposable.disposableIncome) : 'N/A'}`;
 
     // SCORING: 10 points for Budget Health
     const budgetProjection = calculateBudgetHealth();
@@ -3476,7 +3526,7 @@ export default function App() {
     const personalGap = healthData.scoreBreakdown.personalMax - healthData.scoreBreakdown.personalScore;
     if (personalGap > 0) {
       const matDisp = calculateDisposableIncome('mat');
-      const maraDisp = calculateDisposableIncome('mara');
+      const maraDisp = config.isJointBudget ? calculateDisposableIncome('mara') : null;
       const target = 200;
 
       let statusParts = [];
@@ -3492,8 +3542,8 @@ export default function App() {
         }
       }
 
-      // Check person 2's status
-      if (maraDisp) {
+      // Check person 2's status — joint budget only
+      if (config.isJointBudget && maraDisp) {
         if (maraDisp.disposableIncome >= target) {
           const above = Math.round(maraDisp.disposableIncome - target);
           statusParts.push(`${config.person2Name}: Safe to Spend: $${Math.round(maraDisp.disposableIncome)}. $${above} above 200+ target`);
@@ -4185,7 +4235,31 @@ export default function App() {
             ...prev,
             person1Name: updates.person_1_name,
             person2Name: updates.person_2_name,
-            isJointBudget: updates.is_joint_budget,
+            isJointBudget: !!updates.is_joint_budget,
+            matPayAmount: updates.mat_pay_amount ?? prev.matPayAmount,
+            maraPayAmount: updates.mara_pay_amount ?? prev.maraPayAmount,
+            payday1Anchor: updates.payday_1_anchor ?? prev.payday1Anchor,
+            payday1Frequency: updates.payday_1_frequency ?? prev.payday1Frequency,
+            payday2Anchor: updates.payday_2_anchor ?? prev.payday2Anchor,
+            payday2Frequency: updates.payday_2_frequency ?? prev.payday2Frequency,
+            splits: {
+              ...prev.splits,
+              give: updates.split_give ?? prev.splits?.give,
+              save: updates.split_save ?? prev.splits?.save,
+              matLive: updates.split_mat_live ?? prev.splits?.matLive,
+              maraLive: updates.split_mara_live ?? prev.splits?.maraLive,
+            },
+            monthlyBills: {
+              ...prev.monthlyBills,
+              rent: updates.monthly_rent ?? prev.monthlyBills?.rent,
+              gym: updates.monthly_gym ?? prev.monthlyBills?.gym,
+              power: updates.monthly_power ?? prev.monthlyBills?.power,
+              insurance: updates.monthly_insurance ?? prev.monthlyBills?.insurance,
+              groceries: updates.monthly_groceries ?? prev.monthlyBills?.groceries,
+              gas: updates.monthly_gas ?? prev.monthlyBills?.gas,
+              dateNights: updates.monthly_date_nights ?? prev.monthlyBills?.dateNights,
+              subscriptions: updates.monthly_subscriptions ?? prev.monthlyBills?.subscriptions,
+            },
           }));
         }}
         syncBalances={syncBalances}
@@ -4193,6 +4267,9 @@ export default function App() {
         fetchConnectedAccounts={fetchConnectedAccounts}
         fetchPlaidMappings={fetchPlaidMappings}
         fetchSnapshots={fetchSnapshots}
+        fetchCreditCards={fetchCreditCards}
+        isTestMode={isTestMode}
+        onTestReset={isTestMode ? handleTestReset : undefined}
       />
       </>
     );

@@ -705,7 +705,7 @@ app.post('/api/mappings', async (req, res) => {
           return res.status(400).json({ error: `Invalid mapping_mode: ${m.mapping_mode}. Must be one of: ${validModes.join(', ')}` });
         }
 
-        if (m.mapping_mode === 'direct' || m.mapping_mode === 'primary') {
+        if (m.mapping_mode === 'direct') {
           if (!m.bucket || !validBuckets.includes(m.bucket)) {
             return res.status(400).json({ error: `Invalid bucket: ${m.bucket}. Must be one of: ${validBuckets.join(', ')}` });
           }
@@ -740,8 +740,8 @@ app.post('/api/mappings', async (req, res) => {
     await req.supabase.from('account_mappings').delete().eq('user_id', req.userId);
 
     if (mappings.length > 0) {
-      // Add user_id to each mapping row
-      const mappingsWithUser = mappings.map(m => ({ ...m, user_id: req.userId }));
+      // Add user_id to each mapping row, stripping fields that belong to credit_cards not account_mappings
+      const mappingsWithUser = mappings.map(({ due_day, card_label, ...m }) => ({ ...m, user_id: req.userId }));
       const { error } = await req.supabase
         .from('account_mappings')
         .insert(mappingsWithUser);
@@ -1386,6 +1386,442 @@ app.post('/api/test-reset', async (req, res) => {
   } catch (error) {
     console.error('Error during test reset:', error.message);
     res.status(500).json({ error: 'Failed to reset test data' });
+  }
+});
+
+// ─── Transaction Analysis (Onboarding) ─────────────────────────────────────────
+// Analyzes stored transactions to detect income patterns and recurring bills.
+// Called during onboarding Step 11 so the user can confirm what we found.
+app.post('/api/analyze-transactions', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+    const startDate = twoYearsAgo.toISOString().split('T')[0];
+
+    const { data: txns, error } = await req.supabase
+      .from('transactions')
+      .select('amount, date, name, merchant_name, plaid_account_id')
+      .eq('user_id', userId)
+      .gte('date', startDate)
+      .order('date', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // ── Income Detection ─────────────────────────────────────────────────────
+    // Negative amounts in Plaid = money coming IN (deposits)
+    const deposits = (txns || []).filter(t => t.amount < 0);
+
+    // Cluster by amount (±5% tolerance)
+    const clusters = [];
+    for (const dep of deposits) {
+      const amt = Math.abs(dep.amount);
+      let found = false;
+      for (const cluster of clusters) {
+        if (Math.abs(cluster.median - amt) / cluster.median <= 0.05) {
+          cluster.items.push(dep);
+          found = true;
+          break;
+        }
+      }
+      if (!found) clusters.push({ median: amt, items: [dep] });
+    }
+
+    // For clusters with ≥4 occurrences, compute frequency and confidence
+    const incomeStreams = [];
+    for (const cluster of clusters) {
+      if (cluster.items.length < 4) continue;
+      const sorted = cluster.items.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+      const dates = sorted.map(i => new Date(i.date));
+      const intervals = [];
+      for (let i = 1; i < dates.length; i++) {
+        intervals.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+      }
+      const medianInterval = intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)];
+      const frequency = medianInterval <= 9 ? 'weekly'
+        : medianInterval <= 16 ? 'biweekly'
+        : medianInterval <= 17 ? 'semi-monthly'
+        : 'monthly';
+
+      const amounts = sorted.map(i => Math.abs(i.amount));
+      const avgAmount = amounts.reduce((s, a) => s + a, 0) / amounts.length;
+      const variance = amounts.map(a => Math.abs(a - avgAmount) / avgAmount);
+      const maxVariance = Math.max(...variance);
+      const confidence = cluster.items.length >= 8 && maxVariance < 0.05 ? 0.95
+        : cluster.items.length >= 4 ? 0.6 + (cluster.items.length - 4) * 0.04
+        : 0.5;
+
+      incomeStreams.push({
+        id: `income_${incomeStreams.length}`,
+        label: 'Paycheck',
+        amount: Math.round(avgAmount * 100) / 100,
+        frequency,
+        anchorDate: sorted[sorted.length - 1].date,
+        confidence: Math.min(0.99, confidence),
+        occurrences: cluster.items.length,
+      });
+    }
+    // Sort by occurrences descending, return top 2
+    incomeStreams.sort((a, b) => b.occurrences - a.occurrences);
+    const income = incomeStreams.slice(0, 2);
+
+    // ── Bill Detection ───────────────────────────────────────────────────────
+    // Positive amounts in Plaid = money going OUT
+    const outgoing = (txns || []).filter(t => t.amount > 0);
+
+    // Group by normalized merchant name
+    const merchantGroups = {};
+    for (const t of outgoing) {
+      const key = (t.merchant_name || t.name || '').toUpperCase().trim().replace(/\s+\d+$/, '');
+      if (!key) continue;
+      if (!merchantGroups[key]) merchantGroups[key] = [];
+      merchantGroups[key].push(t);
+    }
+
+    // Known bill keyword mappings
+    const billKeywords = {
+      rent: [/rent/i, /zelle.*rent/i, /landlord/i, /lease/i],
+      gym: [/planet\s*fitness/i, /gym/i, /crossfit/i, /ymca/i, /equinox/i, /anytime\s*fitness/i, /la\s*fitness/i],
+      power: [/electric/i, /power/i, /energy/i, /utilities/i, /pge/i, /con\s*ed/i, /duke\s*energy/i, /aps\b/i, /aes\b/i],
+      insurance: [/insurance/i, /geico/i, /progressive/i, /allstate/i, /state\s*farm/i],
+      groceries: [/walmart/i, /kroger/i, /safeway/i, /whole\s*foods/i, /target/i, /costco/i, /aldi/i, /trader\s*joe/i, /publix/i, /heb\b/i],
+      gas: [/shell/i, /exxon/i, /chevron/i, /bp\b/i, /mobil/i, /sunoco/i, /speedway/i, /circle\s*k/i, /wawa/i, /gas\s*station/i],
+      dateNights: [/restaurant/i, /dining/i, /doordash/i, /grubhub/i, /uber\s*eats/i],
+    };
+
+    const bills = [];
+    for (const [merchant, items] of Object.entries(merchantGroups)) {
+      if (items.length < 3) continue;
+      const sorted = items.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+      const dates = sorted.map(i => new Date(i.date));
+      const intervals = [];
+      for (let i = 1; i < dates.length; i++) {
+        intervals.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+      }
+      const medianInterval = intervals.length > 0
+        ? intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)]
+        : 0;
+
+      // Only keep recurring monthly-ish (25–35 day interval)
+      if (medianInterval < 20 || medianInterval > 40) continue;
+
+      const amounts = sorted.map(i => i.amount);
+      const avgAmount = amounts.reduce((s, a) => s + a, 0) / amounts.length;
+      const variance = amounts.map(a => Math.abs(a - avgAmount) / avgAmount);
+      const maxVariance = Math.max(...variance);
+      const isVariable = maxVariance > 0.15;
+
+      // Find modal day of month
+      const days = sorted.map(i => new Date(i.date).getDate());
+      const dayCounts = {};
+      for (const d of days) dayCounts[d] = (dayCounts[d] || 0) + 1;
+      const modalDay = parseInt(Object.entries(dayCounts).sort((a, b) => b[1] - a[1])[0][0]);
+      const dueDay = modalDay >= 28 ? 'last' : modalDay;
+
+      // Attempt to map to a known bill key
+      let mappedBillKey = null;
+      for (const [key, patterns] of Object.entries(billKeywords)) {
+        if (patterns.some(p => p.test(merchant))) { mappedBillKey = key; break; }
+      }
+      // Also check: large amounts likely rent
+      if (!mappedBillKey && avgAmount > 800) mappedBillKey = 'rent';
+
+      const confidence = items.length >= 8 && maxVariance < 0.05 ? 0.95
+        : items.length >= 5 ? 0.75
+        : 0.6;
+
+      bills.push({
+        id: mappedBillKey ? `bill_${mappedBillKey}` : `bill_${bills.length}`,
+        name: merchant.charAt(0) + merchant.slice(1).toLowerCase(),
+        amount: Math.round(avgAmount * 100) / 100,
+        dueDay,
+        isVariable,
+        confidence,
+        mappedBillKey,
+        occurrences: items.length,
+      });
+    }
+
+    // Deduplicate by mappedBillKey (keep highest confidence per key)
+    const billMap = {};
+    for (const b of bills) {
+      const key = b.mappedBillKey || b.id;
+      if (!billMap[key] || b.confidence > billMap[key].confidence) billMap[key] = b;
+    }
+    const dedupedBills = Object.values(billMap).sort((a, b) => b.occurrences - a.occurrences);
+
+    res.json({ income, bills: dedupedBills });
+  } catch (err) {
+    console.error('Error analyzing transactions:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Analyzes 12 months of stored transactions to detect recurring monthly expenses
+// and income streams for the Live Calculation onboarding step.
+// Returns { income, autoDetected, needsReview } where:
+//   autoDetected = high-confidence recurring expenses (auto-categorized)
+//   needsReview  = monthly-ish recurring charges that need user confirmation (Yes/No)
+app.post('/api/analyze-spending', requireAuth, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+    const startDate = twelveMonthsAgo.toISOString().split('T')[0];
+    const monthsInRange = 12;
+
+    const { data: txns, error } = await req.supabase
+      .from('transactions')
+      .select('amount, date, name, merchant_name, personal_finance_category')
+      .eq('user_id', userId)
+      .gte('date', startDate)
+      .eq('pending', false)
+      .order('date', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // ── Income Detection (same logic as analyze-transactions) ─────────────────
+    const deposits = (txns || []).filter(t => t.amount < 0);
+    const incomeClusters = [];
+    for (const dep of deposits) {
+      const amt = Math.abs(dep.amount);
+      let found = false;
+      for (const cluster of incomeClusters) {
+        if (Math.abs(cluster.median - amt) / cluster.median <= 0.05) {
+          cluster.items.push(dep);
+          found = true;
+          break;
+        }
+      }
+      if (!found) incomeClusters.push({ median: amt, items: [dep] });
+    }
+    const incomeStreams = [];
+    for (const cluster of incomeClusters) {
+      if (cluster.items.length < 4) continue;
+      const sorted = cluster.items.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+      const dates = sorted.map(i => new Date(i.date));
+      const intervals = [];
+      for (let i = 1; i < dates.length; i++) {
+        intervals.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+      }
+      const medianInterval = intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)];
+      const frequency = medianInterval <= 9 ? 'weekly'
+        : medianInterval <= 16 ? 'biweekly'
+        : medianInterval <= 17 ? 'semi-monthly'
+        : 'monthly';
+      const amounts = sorted.map(i => Math.abs(i.amount));
+      const avgAmount = amounts.reduce((s, a) => s + a, 0) / amounts.length;
+      const variance = amounts.map(a => Math.abs(a - avgAmount) / avgAmount);
+      const maxVariance = Math.max(...variance);
+      const confidence = cluster.items.length >= 8 && maxVariance < 0.05 ? 0.95
+        : cluster.items.length >= 4 ? 0.6 + (cluster.items.length - 4) * 0.04 : 0.5;
+      incomeStreams.push({
+        id: `income_${incomeStreams.length}`,
+        label: 'Paycheck',
+        amount: Math.round(avgAmount * 100) / 100,
+        frequency,
+        anchorDate: sorted[sorted.length - 1].date,
+        confidence: Math.min(0.99, confidence),
+        occurrences: cluster.items.length,
+      });
+    }
+    incomeStreams.sort((a, b) => b.occurrences - a.occurrences);
+    const income = incomeStreams.slice(0, 2);
+
+    // ── Expense Detection ──────────────────────────────────────────────────────
+    const outgoing = (txns || []).filter(t => t.amount > 0);
+
+    // Merchant keyword → category map (comprehensive)
+    const expenseKeywords = {
+      rent:          [/rent/i, /landlord/i, /lease/i, /mortgage/i, /property\s*mgmt/i, /zelle.*rent/i],
+      groceries:     [/walmart/i, /kroger/i, /safeway/i, /whole\s*foods/i, /target/i, /costco/i, /aldi/i,
+                      /trader\s*joe/i, /publix/i, /heb\b/i, /meijer/i, /wegmans/i, /sprouts/i, /market/i,
+                      /food\s*lion/i, /giant/i, /stop\s*&?\s*shop/i],
+      gas:           [/shell/i, /exxon/i, /chevron/i, /bp\b/i, /mobil/i, /sunoco/i, /speedway/i,
+                      /circle\s*k/i, /wawa/i, /gas\s*station/i, /pilot\s*travel/i, /loves\s*travel/i,
+                      /racetrac/i, /kwik\s*trip/i],
+      power:         [/electric/i, /power/i, /energy/i, /utilities/i, /pge\b/i, /con\s*ed/i,
+                      /duke\s*energy/i, /aps\b/i, /aes\b/i, /dominion/i, /xcel/i, /pacific\s*gas/i,
+                      /georgia\s*power/i, /pepco/i, /entergy/i],
+      insurance:     [/insurance/i, /geico/i, /progressive/i, /allstate/i, /state\s*farm/i,
+                      /liberty\s*mutual/i, /nationwide/i, /usaa/i, /farmers\s*ins/i, /amica/i],
+      gym:           [/planet\s*fitness/i, /gym/i, /crossfit/i, /ymca/i, /equinox/i,
+                      /anytime\s*fitness/i, /la\s*fitness/i, /24\s*hour\s*fitness/i, /crunch\s*fitness/i,
+                      /orange\s*theory/i, /peloton/i, /fitness/i],
+      dateNights:    [/doordash/i, /grubhub/i, /uber\s*eats/i, /postmates/i, /seamless/i,
+                      /restaurant/i, /dining/i, /dine\s*in/i],
+      subscriptions: [/netflix/i, /spotify/i, /hulu/i, /disney\+?/i, /amazon\s*prime/i,
+                      /apple\.com\/bill/i, /apple\s*one/i, /google\s*one/i, /google\s*storage/i,
+                      /microsoft\s*365/i, /adobe/i, /hbo/i, /paramount\+?/i, /peacock/i,
+                      /youtube\s*premium/i, /dropbox/i, /icloud/i, /sling\s*tv/i, /fubo/i,
+                      /discovery\+/i, /espn\+?/i, /pandora/i, /tidal/i, /deezer/i,
+                      /audible/i, /kindle/i, /scribd/i, /duolingo/i, /headspace/i,
+                      /calm/i, /noom/i, /whoop/i, /strava/i],
+    };
+
+    // Plaid personal_finance_category.detailed → expense category
+    const pfcDetailedMap = {
+      'FOOD_AND_DRINK_GROCERIES':            'groceries',
+      'FOOD_AND_DRINK_SUPERMARKETS_AND_GROCERIES': 'groceries',
+      'FOOD_AND_DRINK_RESTAURANTS':          'dateNights',
+      'FOOD_AND_DRINK_FAST_FOOD':            'dateNights',
+      'FOOD_AND_DRINK_COFFEE':               'dateNights',
+      'TRANSPORTATION_GAS_AND_PETROL':       'gas',
+      'TRANSPORTATION_FUEL':                 'gas',
+      'RENT_AND_UTILITIES_RENT':             'rent',
+      'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY': 'power',
+      'RENT_AND_UTILITIES_UTILITIES':        'power',
+      'INSURANCE_AUTO_INSURANCE':            'insurance',
+      'INSURANCE_HOMEOWNERS_INSURANCE':      'insurance',
+      'INSURANCE_RENTERS_INSURANCE':         'insurance',
+      'INSURANCE_LIFE_INSURANCE':            'insurance',
+      'GENERAL_SERVICES_GYMS_AND_FITNESS_CENTERS': 'gym',
+      'PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS': 'gym',
+      'ENTERTAINMENT_SUBSCRIPTION_SERVICE':  'subscriptions',
+      'GENERAL_MERCHANDISE_SUPERSTORES':     'groceries',
+      'GENERAL_MERCHANDISE_DISCOUNT_STORES': 'groceries',
+    };
+
+    // Plaid personal_finance_category.primary → category hint (fallback only)
+    const pfcPrimaryHint = {
+      'SUBSCRIPTION': 'Looks like a subscription',
+      'ENTERTAINMENT': 'Looks like entertainment',
+      'FOOD_AND_DRINK': 'Looks like food or dining',
+      'TRANSPORTATION': 'Looks like transportation',
+      'RENT_AND_UTILITIES': 'Looks like a utility or bill',
+      'INSURANCE_AND_PROTECTION': 'Looks like insurance',
+      'GENERAL_MERCHANDISE': 'Looks like a store purchase',
+    };
+
+    // Normalize merchant name for grouping
+    const normalizeMerchant = (name) =>
+      (name || '').toUpperCase().trim().replace(/\s+\d+$/, '').replace(/\s{2,}/g, ' ');
+
+    // Group outgoing transactions by normalized merchant name
+    const merchantGroups = {};
+    for (const t of outgoing) {
+      const key = normalizeMerchant(t.merchant_name || t.name);
+      if (!key) continue;
+      if (!merchantGroups[key]) merchantGroups[key] = [];
+      merchantGroups[key].push(t);
+    }
+
+    const autoDetected = [];
+    const needsReview = [];
+
+    for (const [merchant, items] of Object.entries(merchantGroups)) {
+      if (items.length < 2) continue;
+
+      const sorted = items.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+      const dates = sorted.map(i => new Date(i.date));
+      const intervals = [];
+      for (let i = 1; i < dates.length; i++) {
+        intervals.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+      }
+      if (intervals.length === 0) continue;
+      const medianInterval = intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)];
+
+      // Only keep monthly-ish recurrence (20–45 day interval)
+      if (medianInterval < 20 || medianInterval > 45) continue;
+
+      const amounts = sorted.map(i => i.amount);
+      const totalAmount = amounts.reduce((s, a) => s + a, 0);
+      const avgAmount = totalAmount / amounts.length;
+      const variance = amounts.map(a => Math.abs(a - avgAmount) / avgAmount);
+      const maxVariance = Math.max(...variance);
+
+      // Monthly average: total / number of months in range
+      const monthlyAmount = Math.round((totalAmount / monthsInRange) * 100) / 100;
+      if (monthlyAmount < 5) continue; // Skip tiny amounts
+
+      // Determine category: PFC detailed > keyword match > PFC primary hint
+      let category = null;
+      let confidence = 0.50;
+      let categoryHint = null;
+
+      // 1. Try Plaid PFC detailed (use most recent transaction's category)
+      const latestTxn = sorted[sorted.length - 1];
+      if (latestTxn.personal_finance_category) {
+        try {
+          const pfc = typeof latestTxn.personal_finance_category === 'string'
+            ? JSON.parse(latestTxn.personal_finance_category)
+            : latestTxn.personal_finance_category;
+          if (pfc?.detailed && pfcDetailedMap[pfc.detailed]) {
+            category = pfcDetailedMap[pfc.detailed];
+            confidence = 0.80;
+          } else if (pfc?.primary && pfcPrimaryHint[pfc.primary]) {
+            categoryHint = pfcPrimaryHint[pfc.primary];
+            confidence = 0.65;
+          }
+        } catch {}
+      }
+
+      // 2. Try keyword match (overrides PFC primary hint; can upgrade PFC-detected category)
+      for (const [cat, patterns] of Object.entries(expenseKeywords)) {
+        if (patterns.some(p => p.test(merchant))) {
+          category = cat;
+          confidence = items.length >= 8 && maxVariance < 0.05 ? 0.95 : 0.85;
+          break;
+        }
+      }
+
+      // 3. Large-amount fallback: likely rent
+      if (!category && avgAmount > 800) {
+        category = 'rent';
+        confidence = 0.75;
+      }
+
+      const lastSeen = sorted[sorted.length - 1].date;
+      const displayName = merchant.charAt(0) + merchant.slice(1).toLowerCase();
+
+      if (confidence >= 0.75 || category) {
+        // High confidence or known category → auto-detected
+        autoDetected.push({
+          id: `auto_${autoDetected.length}`,
+          name: displayName,
+          monthlyAmount,
+          category,
+          confidence,
+          occurrences: items.length,
+        });
+      } else {
+        // Low confidence, monthly-ish, no category → needs user review
+        needsReview.push({
+          id: `review_${needsReview.length}`,
+          name: displayName,
+          monthlyAmount,
+          occurrences: items.length,
+          lastSeen,
+          categoryHint,
+        });
+      }
+    }
+
+    // Deduplicate autoDetected by category (keep highest confidence per category)
+    // Exception: subscriptions can have multiple entries (Netflix + Spotify are different)
+    const autoMap = {};
+    const autoSubscriptions = [];
+    for (const item of autoDetected) {
+      if (item.category === 'subscriptions') {
+        autoSubscriptions.push(item);
+        continue;
+      }
+      if (!autoMap[item.category] || item.confidence > autoMap[item.category].confidence) {
+        autoMap[item.category] = item;
+      }
+    }
+    const dedupedAuto = [...Object.values(autoMap), ...autoSubscriptions]
+      .sort((a, b) => b.monthlyAmount - a.monthlyAmount);
+
+    // Cap needsReview at 15 items, sorted by amount descending (highest impact first)
+    const cappedReview = needsReview
+      .sort((a, b) => b.monthlyAmount - a.monthlyAmount)
+      .slice(0, 15);
+
+    res.json({ income, autoDetected: dedupedAuto, needsReview: cappedReview });
+  } catch (err) {
+    console.error('Error analyzing spending:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

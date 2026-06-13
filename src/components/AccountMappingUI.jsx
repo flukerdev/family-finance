@@ -217,12 +217,6 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
     return groups;
   }, {});
 
-  // Check which direct buckets are already assigned
-  const usedBuckets = new Set();
-  Object.values(mappings).forEach(m => {
-    if (m.mode === 'direct' && m.bucket) usedBuckets.add(m.bucket);
-  });
-
   if (loading) {
     return (
       <div style={styles.container}>
@@ -359,19 +353,11 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
                           borderColor: m ? '#10b981' : '#334155'
                         }}
                       >
-                        {checkingBuckets.map(bucket => {
-                          const isUsed = usedBuckets.has(bucket.value) && m?.bucket !== bucket.value;
-                          return (
-                            <option
-                              key={bucket.value}
-                              value={bucket.value}
-                              disabled={isUsed}
-                            >
-                              {bucket.label} {isUsed ? '(assigned)' : ''}
-                            </option>
-                          );
-                        })}
-                        <option value="primary">Main account (splits into all buckets)</option>
+                        {checkingBuckets.map(bucket => (
+                          <option key={bucket.value} value={bucket.value}>
+                            {bucket.label}
+                          </option>
+                        ))}
                       </select>
                     )}
                   </div>

@@ -276,7 +276,11 @@ const PrivacyPolicyContent = ({ theme }) => (
 // Steps: 0-3 welcome slides, 4 privacy, 5 names, 6 connect, 7 celebration,
 //        8 mapping explainer, 9 map, 10 sync, 11 done
 
-const STEPPER_LABELS = ['Welcome', 'Privacy', 'Names', 'Connect', 'Map', 'Sync', 'Done'];
+// Steps: 0-3 welcome, 4 privacy, 5 names, 6 connect, 7 celebration,
+//        8 mapping explainer, 9 map, 10 sync,
+//        11 live analysis spinner, 12 clarification cards, 13 live number review,
+//        14 budget splits, 15 done
+const STEPPER_LABELS = ['Welcome', 'Privacy', 'Names', 'Connect', 'Map', 'Sync', 'Spending', 'Splits', 'Done'];
 
 const stepToDotIndex = (step) => {
   if (step <= 3) return 0;
@@ -285,10 +289,12 @@ const stepToDotIndex = (step) => {
   if (step <= 7) return 3;
   if (step <= 9) return 4;
   if (step === 10) return 5;
-  return 6;
+  if (step <= 13) return 6; // 11 = analyze, 12 = cards, 13 = live number
+  if (step === 14) return 7; // splits
+  return 8;                  // done
 };
 
-const TOTAL_STEPS = 12;
+const TOTAL_STEPS = 16;
 
 // ─── Session Storage Helpers ────────────────────────────────────────────────
 const STORAGE_KEY = 'onboarding_step';
@@ -316,6 +322,9 @@ const Onboarding = ({
   fetchConnectedAccounts,
   fetchPlaidMappings,
   fetchSnapshots,
+  fetchCreditCards,
+  isTestMode,
+  onTestReset,
 }) => {
   const [step, setStepRaw] = useState(() => loadStep());
   const [direction, setDirection] = useState(1);
@@ -327,6 +336,24 @@ const Onboarding = ({
   const [syncStatus, setSyncStatus] = useState('idle');
   const [syncMessage, setSyncMessage] = useState('');
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+
+  // Live Calculation state (replaces old analysisStatus / editedBills)
+  const [liveAnalysis, setLiveAnalysis] = useState(null); // { income, autoDetected, needsReview }
+  const [liveAnalysisStatus, setLiveAnalysisStatus] = useState('idle'); // idle | analyzing | done | error
+  const [liveAnalysisError, setLiveAnalysisError] = useState('');
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [confirmedReviewItems, setConfirmedReviewItems] = useState([]);
+  const [liveExpenses, setLiveExpenses] = useState({
+    rent: 0, groceries: 0, gas: 0, power: 0,
+    gym: 0, insurance: 0, dateNights: 0, subscriptions: 0,
+  });
+  const [liveExpenseEditing, setLiveExpenseEditing] = useState(null); // key being edited in Step 13
+  const [editedIncome, setEditedIncome] = useState([]);
+  const [splitGive, setSplitGive] = useState(0.20);
+  const [splitSave, setSplitSave] = useState(0.20);
+  const [person1Live, setPerson1Live] = useState('');
+  const [person2Live, setPerson2Live] = useState('');
+  const [editingId, setEditingId] = useState(null);
 
   const welcomeSlides = getWelcomeSlides(theme);
   const currentDot = stepToDotIndex(step);
@@ -348,11 +375,20 @@ const Onboarding = ({
     if (step === 8) return true;
     if (step === 9) return false; // Map — handled by save button
     if (step === 10) return syncStatus === 'done';
-    if (step === 11) return true;
+    if (step === 11) return false; // Live analysis — auto-advances
+    if (step === 12) return false; // Clarification cards — handled by Yes/No buttons
+    if (step === 13) return false; // Live number — handled by "Lock it in" button
+    if (step === 14) {
+      const g = parseFloat(splitGive) || 0;
+      const sv = parseFloat(splitSave) || 0;
+      return g + sv < 1 && parseFloat(person1Live) > 0;
+    }
+    if (step === 15) return true;
     return false;
   };
 
   const goNext = () => { if (step < TOTAL_STEPS - 1) setStep(step + 1); };
+
   const goBack = () => { if (step > 0) setStep(step - 1); };
 
   // ─── Plaid Callbacks ───────────────────────────────────────────────────────
@@ -385,7 +421,8 @@ const Onboarding = ({
       setSyncMessage('Almost there...');
       await fetchConnectedAccounts();
       await fetchPlaidMappings();
-      await fetchSnapshots();
+      await fetchCreditCards();
+      // fetchSnapshots() omitted — syncBalances already calls it silently
       setSyncStatus('done');
       setSyncMessage('All done!');
     } catch (err) {
@@ -395,14 +432,100 @@ const Onboarding = ({
     }
   };
 
+  // ─── Live Calculation ─────────────────────────────────────────────────────
+
+  // Build liveExpenses from autoDetected items returned by /api/analyze-spending
+  const buildExpensesFromDetected = (items) => {
+    const expenses = { rent: 0, groceries: 0, gas: 0, power: 0, gym: 0, insurance: 0, dateNights: 0, subscriptions: 0 };
+    for (const item of (items || [])) {
+      const cat = item.category;
+      if (cat && expenses.hasOwnProperty(cat)) {
+        expenses[cat] += item.monthlyAmount;
+      }
+      // null category → subscriptions bucket
+      else if (!cat) {
+        expenses.subscriptions += item.monthlyAmount;
+      }
+    }
+    // Round to 2 decimal places
+    for (const k of Object.keys(expenses)) {
+      expenses[k] = Math.round(expenses[k] * 100) / 100;
+    }
+    return expenses;
+  };
+
+  // Merge user-confirmed items from the review queue into liveExpenses.
+  // needsReview items have no confirmed category, so they go into subscriptions.
+  const mergeConfirmedIntoExpenses = (confirmed) => {
+    setLiveExpenses(prev => {
+      const updated = { ...prev };
+      for (const item of confirmed) {
+        updated.subscriptions = Math.round((updated.subscriptions + item.monthlyAmount) * 100) / 100;
+      }
+      return updated;
+    });
+  };
+
+  const runLiveAnalysis = async () => {
+    setLiveAnalysisStatus('analyzing');
+    setLiveAnalysisError('');
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await authFetch(`${API_URL}/api/analyze-spending`, { method: 'POST' });
+      if (!response.ok) throw new Error('Analysis failed');
+      const data = await response.json();
+      setLiveAnalysis(data);
+      // Pre-populate income for Budget Splits (Step 14)
+      if (data.income?.length > 0) {
+        setEditedIncome(data.income.map((inc, i) => ({ ...inc, id: `income_${i}` })));
+      }
+      // Build liveExpenses from auto-detected items
+      const expenses = buildExpensesFromDetected(data.autoDetected);
+      setLiveExpenses(expenses);
+      setReviewIndex(0);
+      setConfirmedReviewItems([]);
+      setLiveAnalysisStatus('done');
+      // Skip clarification cards if nothing needs review
+      if (!data.needsReview || data.needsReview.length === 0) {
+        setStep(13);
+      } else {
+        setStep(12);
+      }
+    } catch (err) {
+      console.error('Live analysis error:', err);
+      setLiveAnalysisStatus('error');
+      setLiveAnalysisError('Something went wrong analyzing your transactions. You can skip this and enter your expenses manually.');
+    }
+  };
+
   // ─── Complete ───────────────────────────────────────────────────────────────
 
   const handleComplete = () => {
     clearStep();
+    const income1 = editedIncome[0] || {};
+    const income2 = editedIncome[1] || {};
     onComplete({
       person_1_name: person1Name.trim() || 'Friend',
       person_2_name: isJointBudget ? (person2Name.trim() || 'Partner') : '',
       is_joint_budget: isJointBudget,
+      mat_pay_amount: parseFloat(income1.amount) || null,
+      mara_pay_amount: isJointBudget ? (parseFloat(income2.amount) || null) : null,
+      payday_1_anchor: income1.anchorDate || null,
+      payday_1_frequency: income1.frequency || 'biweekly',
+      payday_2_anchor: isJointBudget ? (income2.anchorDate || null) : null,
+      payday_2_frequency: isJointBudget ? (income2.frequency || 'biweekly') : null,
+      split_give: parseFloat(splitGive),
+      split_save: parseFloat(splitSave),
+      split_mat_live: parseFloat(person1Live) || null,
+      split_mara_live: isJointBudget ? (parseFloat(person2Live) || null) : null,
+      monthly_rent: liveExpenses.rent || null,
+      monthly_gym: liveExpenses.gym || null,
+      monthly_power: liveExpenses.power || null,
+      monthly_insurance: liveExpenses.insurance || null,
+      monthly_groceries: liveExpenses.groceries || null,
+      monthly_gas: liveExpenses.gas || null,
+      monthly_date_nights: liveExpenses.dateNights || null,
+      monthly_subscriptions: liveExpenses.subscriptions || null,
     });
   };
 
@@ -419,6 +542,13 @@ const Onboarding = ({
     }
     touchRef.current = null;
   };
+
+  // If we mount at step 10 (e.g., after a page refresh mid-sync), auto-restart sync
+  useEffect(() => {
+    if (step === 10 && syncStatus === 'idle') {
+      runSync();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Styles ─────────────────────────────────────────────────────────────────
 
@@ -1097,11 +1227,11 @@ const Onboarding = ({
 
   const renderSync = () => (
     <div style={s.content}>
-      {syncStatus === 'syncing' && (
+      {(syncStatus === 'idle' || syncStatus === 'syncing') && (
         <>
           <div style={s.spinner} />
           <h1 style={s.heading}>Syncing Your Data</h1>
-          <p style={s.subtext}>{syncMessage}</p>
+          <p style={s.subtext}>{syncMessage || 'Getting everything ready...'}</p>
         </>
       )}
       {syncStatus === 'done' && (
@@ -1138,7 +1268,353 @@ const Onboarding = ({
     </div>
   );
 
-  // ─── Step 11: Done ─────────────────────────────────────────────────────────
+  // ─── Step 11: Live Analysis Spinner ──────────────────────────────────────────
+
+  useEffect(() => {
+    if (step === 11 && liveAnalysisStatus === 'idle') {
+      runLiveAnalysis();
+    }
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const renderLiveAnalyze = () => (
+    <div style={s.content}>
+      {(liveAnalysisStatus === 'idle' || liveAnalysisStatus === 'analyzing') && (
+        <>
+          <div style={s.spinner} />
+          <h1 style={s.heading}>Understanding your spending</h1>
+          <p style={s.subtext}>Scanning 12 months of transactions to find your recurring expenses...</p>
+        </>
+      )}
+      {liveAnalysisStatus === 'error' && (
+        <>
+          <h1 style={s.heading}>Analysis Skipped</h1>
+          <div style={s.errorBox}>
+            <p style={{ marginBottom: '0.75rem' }}>{liveAnalysisError}</p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button style={s.retryButton} onClick={runLiveAnalysis}>Retry</button>
+              <button
+                style={{ ...s.retryButton, backgroundColor: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted }}
+                onClick={() => {
+                  setLiveExpenses({ rent: 0, groceries: 0, gas: 0, power: 0, gym: 0, insurance: 0, dateNights: 0, subscriptions: 0 });
+                  setStep(13);
+                }}
+              >
+                Skip — enter manually
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  // ─── Step 12: Clarification Cards ─────────────────────────────────────────
+
+  const renderLiveReview = () => {
+    const queue = liveAnalysis?.needsReview || [];
+    const totalItems = queue.length;
+    const currentItem = queue[reviewIndex];
+
+    if (!currentItem) {
+      // Shouldn't normally render — analysis skips here if queue is empty
+      return (
+        <div style={s.content}>
+          <h1 style={s.heading}>All done!</h1>
+          <p style={s.subtext}>Tap Continue to see your monthly total.</p>
+          <button style={s.bigButton} onClick={() => setStep(13)}>See my expenses</button>
+        </div>
+      );
+    }
+
+    const handleYes = () => {
+      const updated = [...confirmedReviewItems, currentItem];
+      if (reviewIndex + 1 >= totalItems) {
+        setConfirmedReviewItems(updated);
+        mergeConfirmedIntoExpenses(updated);
+        setStep(13);
+      } else {
+        setConfirmedReviewItems(updated);
+        setReviewIndex(i => i + 1);
+      }
+    };
+
+    const handleNo = () => {
+      if (reviewIndex + 1 >= totalItems) {
+        mergeConfirmedIntoExpenses(confirmedReviewItems);
+        setStep(13);
+      } else {
+        setReviewIndex(i => i + 1);
+      }
+    };
+
+    return (
+      <div style={s.content}>
+        <p style={{ color: theme.textDimmed, fontSize: '0.8rem', marginBottom: '1.5rem', textAlign: 'center' }}>
+          {reviewIndex + 1} of {totalItems}
+        </p>
+
+        <motion.div
+          key={reviewIndex}
+          initial={{ x: 60, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: -60, opacity: 0 }}
+          transition={{ duration: 0.25, ease: 'easeOut' }}
+          style={{ width: '100%' }}
+        >
+          <div style={{ ...s.card, textAlign: 'center', paddingTop: '2rem', paddingBottom: '2rem' }}>
+            <p style={{ color: theme.textMuted, fontSize: '0.75rem', fontWeight: '600', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+              Is this a regular monthly expense?
+            </p>
+            <h2 style={{ color: theme.text, fontSize: '1.4rem', fontWeight: '700', marginBottom: '0.5rem' }}>
+              {currentItem.name}
+            </h2>
+            <p style={{ color: theme.accent, fontSize: '1.2rem', fontWeight: '600', marginBottom: '0.25rem' }}>
+              ${currentItem.monthlyAmount.toFixed(2)} / month
+            </p>
+            <p style={{ color: theme.textDimmed, fontSize: '0.8rem', marginBottom: currentItem.categoryHint ? '0.25rem' : '0' }}>
+              Appeared {currentItem.occurrences}x over the last year
+            </p>
+            {currentItem.categoryHint && (
+              <p style={{ color: theme.textDimmed, fontSize: '0.8rem', fontStyle: 'italic' }}>
+                {currentItem.categoryHint}
+              </p>
+            )}
+          </div>
+        </motion.div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', width: '100%', marginTop: '1.5rem' }}>
+          <button
+            onClick={handleNo}
+            style={{
+              flex: 1, padding: '0.875rem', backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`, borderRadius: '0.5rem',
+              color: theme.textMuted, fontSize: '1rem', fontWeight: '600', cursor: 'pointer',
+            }}
+          >
+            No, skip it
+          </button>
+          <button
+            onClick={handleYes}
+            style={{
+              flex: 1, padding: '0.875rem', backgroundColor: theme.success,
+              border: 'none', borderRadius: '0.5rem',
+              color: '#fff', fontSize: '1rem', fontWeight: '600', cursor: 'pointer',
+            }}
+          >
+            Yes, include
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Step 13: Live Number Review ───────────────────────────────────────────
+
+  const renderLiveNumber = () => {
+    const expenseLabels = {
+      rent: 'Rent / Mortgage',
+      groceries: 'Groceries',
+      gas: 'Gas',
+      power: 'Power / Utilities',
+      insurance: 'Insurance',
+      gym: 'Gym / Fitness',
+      dateNights: 'Dining / Dates',
+      subscriptions: 'Subscriptions',
+    };
+
+    const total = Object.values(liveExpenses).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+    const monthsAnalyzed = liveAnalysis
+      ? Math.max(...(liveAnalysis.autoDetected || []).map(i => i.occurrences || 0), 1)
+      : null;
+
+    const inputStyle = {
+      background: theme.bg, border: `1px solid ${theme.accent}`, borderRadius: '0.375rem',
+      color: theme.text, padding: '0.3rem 0.5rem', fontSize: '0.9rem', width: '90px',
+      textAlign: 'right',
+    };
+
+    return (
+      <div style={{ ...s.content, justifyContent: 'flex-start', paddingTop: '1.5rem' }}>
+        <motion.div
+          custom={0} variants={staggerChild} initial="hidden" animate="visible"
+          style={{ textAlign: 'center', width: '100%', marginBottom: '1.5rem' }}
+        >
+          <h1 style={{ ...s.heading, marginBottom: '0.25rem' }}>Your monthly expenses</h1>
+          {monthsAnalyzed && (
+            <p style={{ color: theme.textDimmed, fontSize: '0.8rem', marginBottom: '1rem' }}>
+              Based on up to {monthsAnalyzed} months of your transactions
+            </p>
+          )}
+          <p style={{ fontSize: '2.5rem', fontWeight: '800', color: theme.text, margin: '0.5rem 0 0.25rem' }}>
+            ${Math.round(total).toLocaleString()}
+          </p>
+          <p style={{ color: theme.textMuted, fontSize: '0.9rem' }}>/ month</p>
+        </motion.div>
+
+        <motion.div
+          custom={1} variants={staggerChild} initial="hidden" animate="visible"
+          style={{ ...s.card, width: '100%', boxSizing: 'border-box' }}
+        >
+          {Object.entries(expenseLabels).map(([key, label]) => {
+            const val = liveExpenses[key];
+            if (val === 0 && key === 'subscriptions') return null; // hide subscriptions row if zero
+            return (
+              <div
+                key={key}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '0.5rem 0', borderBottom: `1px solid ${theme.border}20`,
+                }}
+              >
+                <span style={{ color: theme.textMuted, fontSize: '0.9rem' }}>{label}</span>
+                {liveExpenseEditing === key ? (
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    autoFocus
+                    style={inputStyle}
+                    value={liveExpenses[key]}
+                    onChange={e => setLiveExpenses(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
+                    onBlur={() => setLiveExpenseEditing(null)}
+                    onKeyDown={e => { if (e.key === 'Enter') setLiveExpenseEditing(null); }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => setLiveExpenseEditing(key)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'right', padding: 0 }}
+                  >
+                    <span style={{ color: theme.text, fontSize: '0.9rem', fontWeight: '600' }}>
+                      ${Math.round(parseFloat(val) || 0).toLocaleString()}
+                    </span>
+                    <span style={{ color: theme.textDimmed, fontSize: '0.75rem', marginLeft: '0.35rem' }}>edit</span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </motion.div>
+
+        <motion.button
+          custom={2} variants={staggerChild} initial="hidden" animate="visible"
+          style={s.bigButton}
+          onClick={() => setStep(14)}
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+        >
+          Lock it in
+        </motion.button>
+      </div>
+    );
+  };
+
+  // ─── Step 13: Budget Splits ────────────────────────────────────────────────
+
+  const renderSplits = () => {
+    const g = parseFloat(splitGive) * 100 || 20;
+    const sv = parseFloat(splitSave) * 100 || 20;
+    const income1Amt = parseFloat(editedIncome[0]?.amount) || 0;
+    const personalAmt = income1Amt > 0 ? Math.max(0, income1Amt - income1Amt * (g / 100) - income1Amt * (sv / 100) - parseFloat(person1Live || 0)) / 2 : null;
+
+    const fieldStyle = {
+      display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '1rem',
+    };
+    const labelStyle = { color: theme.textMuted, fontSize: '0.8rem', fontWeight: '600', letterSpacing: '0.05em', textTransform: 'uppercase' };
+    const inputStyle = {
+      background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: '0.5rem',
+      color: theme.text, padding: '0.6rem 0.75rem', fontSize: '1rem', width: '100%', boxSizing: 'border-box',
+    };
+
+    return (
+      <div style={{ ...s.content, justifyContent: 'flex-start', paddingTop: '1.5rem' }}>
+        <h1 style={{ ...s.heading, fontSize: '1.4rem', marginBottom: '0.25rem' }}>How do you split each paycheck?</h1>
+        <p style={{ ...s.subtext, fontSize: '0.875rem', marginBottom: '1.5rem' }}>
+          Set your Give First, Save Second percentages and how much goes to shared expenses each paycheck.
+        </p>
+
+        <div style={{ width: '100%', display: 'flex', gap: '1rem' }}>
+          <div style={{ ...fieldStyle, flex: 1 }}>
+            <label style={labelStyle}>Give %</label>
+            <input
+              style={inputStyle}
+              type="number"
+              min="0" max="99" step="1"
+              value={Math.round(parseFloat(splitGive) * 100) || 20}
+              onChange={e => setSplitGive(parseFloat(e.target.value) / 100 || 0)}
+            />
+          </div>
+          <div style={{ ...fieldStyle, flex: 1 }}>
+            <label style={labelStyle}>Save %</label>
+            <input
+              style={inputStyle}
+              type="number"
+              min="0" max="99" step="1"
+              value={Math.round(parseFloat(splitSave) * 100) || 20}
+              onChange={e => setSplitSave(parseFloat(e.target.value) / 100 || 0)}
+            />
+          </div>
+        </div>
+
+        {g + sv >= 100 && (
+          <p style={{ color: theme.danger, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+            Give + Save must be less than 100%
+          </p>
+        )}
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>{person1Name || 'Your'} LIVE contribution per paycheck ($)</label>
+          <input
+            style={inputStyle}
+            type="number"
+            min="0"
+            value={person1Live}
+            onChange={e => setPerson1Live(e.target.value)}
+            placeholder="e.g. 984"
+          />
+        </div>
+
+        {isJointBudget && (
+          <div style={fieldStyle}>
+            <label style={labelStyle}>{person2Name || "Partner's"} LIVE contribution per paycheck ($)</label>
+            <input
+              style={inputStyle}
+              type="number"
+              min="0"
+              value={person2Live}
+              onChange={e => setPerson2Live(e.target.value)}
+              placeholder="e.g. 656"
+            />
+          </div>
+        )}
+
+        {income1Amt > 0 && parseFloat(person1Live) > 0 && g + sv < 100 && (
+          <div style={{ ...s.card, width: '100%', boxSizing: 'border-box', marginTop: '0.5rem' }}>
+            <p style={{ color: theme.textMuted, fontSize: '0.8rem', marginBottom: '0.5rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Preview — from your ${income1Amt.toFixed(2)} paycheck
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {[
+                { label: 'Give', value: (income1Amt * g / 100).toFixed(0), color: theme.give },
+                { label: 'Save', value: (income1Amt * sv / 100).toFixed(0), color: theme.save },
+                { label: 'LIVE', value: parseFloat(person1Live).toFixed(0), color: theme.live },
+                { label: 'Personal', value: personalAmt !== null ? personalAmt.toFixed(0) : '—', color: theme.mat },
+              ].map(pill => (
+                <span key={pill.label} style={{
+                  background: `${pill.color}22`, color: pill.color,
+                  borderRadius: '1rem', padding: '0.25rem 0.6rem',
+                  fontSize: '0.8rem', fontWeight: '600',
+                }}>
+                  {pill.label}: ${pill.value}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─── Step 14: Done ─────────────────────────────────────────────────────────
 
   const renderDone = () => (
     <div style={s.content}>
@@ -1197,14 +1673,18 @@ const Onboarding = ({
   const renderStep = () => {
     if (step <= 3) return renderWelcomeSlide();
     switch (step) {
-      case 4: return renderPrivacy();
-      case 5: return renderNames();
-      case 6: return renderConnect();
-      case 7: return renderCelebration();
-      case 8: return renderMappingExplainer();
-      case 9: return renderMap();
+      case 4:  return renderPrivacy();
+      case 5:  return renderNames();
+      case 6:  return renderConnect();
+      case 7:  return renderCelebration();
+      case 8:  return renderMappingExplainer();
+      case 9:  return renderMap();
       case 10: return renderSync();
-      case 11: return renderDone();
+      case 11: return renderLiveAnalyze();
+      case 12: return renderLiveReview();
+      case 13: return renderLiveNumber();
+      case 14: return renderSplits();
+      case 15: return renderDone();
       default: return null;
     }
   };
@@ -1212,8 +1692,10 @@ const Onboarding = ({
   // ─── Navigation Bar ───────────────────────────────────────────────────────
 
   const renderNav = () => {
-    const showBack = step > 0 && step !== 10 && step !== 7;
-    const showNext = step !== 9 && step !== 11;
+    // Hide back on steps that auto-advance or have their own primary action button
+    const showBack = step > 0 && step !== 7 && step !== 10 && step !== 11 && step !== 12 && step !== 15;
+    // Hide next on steps with their own buttons (map saves, cards use Yes/No, live number uses "Lock it in", done uses "Let's go")
+    const showNext = step !== 9 && step !== 12 && step !== 13 && step !== 15;
     const nextEnabled = canGoNext();
     const nextLabel = step <= 3 ? 'Next' : 'Continue';
 
@@ -1268,6 +1750,25 @@ const Onboarding = ({
 
       {renderNav()}
       {renderPrivacyModal()}
+
+      {isTestMode && onTestReset && (
+        <div style={{ textAlign: 'center', paddingBottom: '1rem' }}>
+          <button
+            onClick={() => { clearStep(); onTestReset(); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#f59e0b',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              opacity: 0.7,
+              textDecoration: 'underline',
+            }}
+          >
+            ↩ Reset test data &amp; start over
+          </button>
+        </div>
+      )}
     </div>
   );
 };
