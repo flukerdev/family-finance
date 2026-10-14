@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import { API_URL } from '../api';
 
 const PlaidLinkButton = ({ linkToken, onSuccess, authFetch }) => {
   const onPlaidSuccess = useCallback(async (publicToken, metadata) => {

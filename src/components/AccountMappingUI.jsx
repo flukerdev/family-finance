@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import { API_URL } from '../api';
 
 // Budget buckets that a checking/savings account can be directly mapped to
 const CHECKING_BUCKETS = [

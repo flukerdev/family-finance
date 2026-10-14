@@ -9,6 +9,7 @@ import SafeToSpendChart from './components/SafeToSpendChart';
 import BudgetHealthChart from './components/BudgetHealthChart';
 import Onboarding from './components/Onboarding';
 import CloseView from './components/CloseView';
+import { API_URL } from './api';
 
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -29,7 +30,6 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // API base URL. In production the Express app is deployed as a Vercel function on the
 // same origin (see api/index.js + vercel.json), so the default is '' (same-origin /api).
 // Local dev talks to `npm run server` on :3001. VITE_API_URL overrides both.
-const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:3001' : '');
 
 // Test mode detection — activates sandbox Plaid (free), skips OTP, shows reset button.
 // ONLY works on localhost with ?testmode in the URL. Ignored on production (Vercel).
@@ -2163,7 +2163,7 @@ export default function App() {
 
     const { error } = await supabase
       .from('app_config')
-      .insert(configData);
+      .upsert(configData, { onConflict: 'user_id' });
 
     if (error) {
       console.error('Error saving config:', error);

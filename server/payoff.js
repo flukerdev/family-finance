@@ -304,10 +304,10 @@ router.get('/pnl', async (req, res) => {
     const spendTotal = num(spending.reduce((s, t) => s + Number(t.amount), 0));
 
     // Live plan: the fixed monthly lines in app_config. Column names per CLAUDE.md.
-    const liveKeys = ['rent', 'groceries', 'gas', 'date_nights', 'power', 'gym', 'insurance'];
+    const liveKeys = ['monthly_rent', 'monthly_groceries', 'monthly_gas', 'monthly_date_nights', 'monthly_power', 'monthly_gym', 'monthly_insurance', 'monthly_subscriptions'];
     const livePlan = {};
     let livePlanTotal = 0;
-    if (cfg) for (const k of liveKeys) if (cfg[k] != null) { livePlan[k] = num(cfg[k]); livePlanTotal = num(livePlanTotal + Number(cfg[k])); }
+    if (cfg) for (const k of liveKeys) if (cfg[k] != null) { livePlan[k.replace(/^monthly_/, '')] = num(cfg[k]); livePlanTotal = num(livePlanTotal + Number(cfg[k])); }
     const liveActual = num(spending.filter(t => t.bucket === 'live').reduce((s, t) => s + Number(t.amount), 0));
 
     res.json({

@@ -470,7 +470,7 @@ const Onboarding = ({
     setLiveAnalysisStatus('analyzing');
     setLiveAnalysisError('');
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const API_URL = (await import('../api')).API_URL;
       const response = await authFetch(`${API_URL}/api/analyze-spending`, { method: 'POST' });
       if (!response.ok) throw new Error('Analysis failed');
       const data = await response.json();
