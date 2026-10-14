@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { cardColor } from '../theme';
 
 // ─── Close view: Payoff (per card) + P&L (per calendar month) ────────────────
 // Everything here reads from /api/payoff/* and /api/pnl. Money never moves.
@@ -26,8 +27,8 @@ export default function CloseView({ theme, authFetch, apiUrl, creditCards, confi
 
   return (
     <main style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem 0.25rem' }}>
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 600, color: theme.text, margin: 0 }}>Close</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'calc(1rem + env(safe-area-inset-top)) 1rem 0.25rem' }} className="fade">
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: theme.text, margin: 0, letterSpacing: -0.3 }}>Close</h2>
         <div style={s.segment}>
           {['payoff', 'pnl'].map(k => (
             <button key={k} onClick={() => setTab(k)} style={{ ...s.segmentBtn, ...(tab === k ? s.segmentBtnActive : {}) }}>
@@ -161,8 +162,9 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
       <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', padding: '0.5rem 0' }}>
         {cards.map(c => (
           <button key={c.card_id} onClick={() => { setCardId(c.card_id); setRange(null); setEditingStatement(false); }}
-            style={{ ...s.chip, ...(c.card_id === cardId ? s.chipActive : {}) }}>
-            {c.label || c.card_id}<span style={{ fontSize: '0.65rem', opacity: 0.8, marginLeft: 6 }}>due {ordinal(c.due_day)}</span>
+            style={{ ...s.chip, ...(c.card_id === cardId ? { background: cardColor(theme, c), borderColor: cardColor(theme, c), color: theme.onAccent } : { borderColor: cardColor(theme, c) }) }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: c.card_id === cardId ? theme.onAccent : cardColor(theme, c), display: 'inline-block', marginRight: 8, opacity: 0.9 }} />
+            {c.label || c.card_id}<span style={{ fontSize: '0.7rem', opacity: 0.8, marginLeft: 6 }}>due {ordinal(c.due_day)}</span>
           </button>
         ))}
       </div>
@@ -187,9 +189,9 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
       {data && (
         <>
           {/* ── 1. Readiness: the one thing that matters ── */}
-          <div style={{ ...s.card, borderColor: toneColor, borderWidth: 2 }}>
+          <div style={{ ...s.card, borderColor: toneColor, borderWidth: 2 }} className="fade">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{card?.label}</div>
+              <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 22, height: 15, borderRadius: 3, background: cardColor(theme, card), display: 'inline-block' }} />{card?.label}</div>
               <div style={{ fontSize: '0.8rem', fontWeight: 600, color: toneColor }}>{dueText && `${fmtDateLong(data.period.due)} · ${dueText}`}</div>
             </div>
 
@@ -301,7 +303,7 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
               <strong style={{ fontSize: '1.1rem', fontVariantNumeric: 'tabular-nums' }}>{fmt(st.amount)}</strong>
             </div>
             {data.completed
-              ? <div style={{ ...s.note, background: theme.successBg, color: theme.successLight, marginTop: '0.75rem' }}>Marked paid {relTime(data.completed.paid_at)} · {fmt(data.completed.statement_amount)}</div>
+              ? <div style={{ ...s.note, background: theme.successBg, color: theme.successLight, marginTop: '0.75rem', fontWeight: 600 }}>✓ Paid {fmt(data.completed.statement_amount)} · {relTime(data.completed.paid_at)}. Nothing else to do for this card.</div>
               : <button onClick={complete} style={{ ...s.primaryBtn, marginTop: '0.75rem', width: '100%' }}>I made these transfers and paid the card</button>}
           </div>
 
@@ -600,16 +602,16 @@ const makeStyles = (theme) => ({
   segment: { display: 'flex', background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 2 },
   segmentBtn: { background: 'transparent', border: 'none', color: theme.textMuted, padding: '0.35rem 0.8rem', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer' },
   segmentBtnActive: { background: theme.accent, color: theme.onAccent },
-  chip: { flex: '0 0 auto', background: theme.cardBg, border: `1px solid ${theme.border}`, color: theme.text, borderRadius: 999, padding: '0.45rem 0.9rem', fontSize: '0.85rem', cursor: 'pointer', whiteSpace: 'nowrap' },
+  chip: { flex: '0 0 auto', background: theme.cardBg, border: `1.5px solid ${theme.border}`, color: theme.text, borderRadius: 999, padding: '0.55rem 1rem', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 44, display: 'flex', alignItems: 'center' },
   chipActive: { background: theme.accent, borderColor: theme.accent, color: theme.onAccent },
-  iconBtn: { background: theme.cardBgElevated, border: 'none', color: theme.text, width: 34, height: 34, borderRadius: 17, fontSize: '1.2rem', cursor: 'pointer' },
-  primaryBtn: { background: theme.success, color: theme.onAccent, border: 'none', borderRadius: 10, padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' },
-  secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 10, padding: '0.6rem 0.8rem', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer' },
-  linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.85rem', padding: '0.25rem' },
+  iconBtn: { background: theme.cardBgElevated, border: 'none', color: theme.text, width: 44, height: 44, borderRadius: 22, fontSize: '1.3rem', cursor: 'pointer' },
+  primaryBtn: { background: theme.success, color: theme.onAccent, border: 'none', borderRadius: 12, padding: '0.85rem 1rem', fontWeight: 700, fontSize: '1rem', cursor: 'pointer', minHeight: 48 },
+  secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '0.7rem 0.8rem', fontWeight: 500, fontSize: '0.95rem', cursor: 'pointer', minHeight: 44 },
+  linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.9rem', padding: '0.5rem 0.25rem', minHeight: 36 },
   note: { background: theme.accentBg, color: theme.textMuted, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.8rem' },
   transferRow: { display: 'flex', alignItems: 'center', padding: '0.35rem 0', fontSize: '0.95rem' },
   txnRow: { display: 'flex', alignItems: 'center', padding: '0.6rem 0.25rem', borderBottom: `1px solid ${theme.border}`, color: theme.text },
-  bucketTag: { border: 'none', color: theme.onAccent, borderRadius: 999, padding: '0.15rem 0.6rem', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', marginTop: 2 },
+  bucketTag: { border: 'none', color: theme.onAccent, borderRadius: 999, padding: '0.3rem 0.7rem', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', marginTop: 4, minHeight: 28 },
   sheetBackdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', zIndex: 2000 },
   sheet: { width: '100%', maxWidth: 520, margin: '0 auto', background: theme.cardBg, color: theme.text, borderRadius: '16px 16px 0 0', padding: '1rem 1rem calc(1.5rem + env(safe-area-inset-bottom))', border: `1px solid ${theme.border}`, maxHeight: '85vh', overflowY: 'auto' },
 });

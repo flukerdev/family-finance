@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { themes } from './theme';
+import { themes, cardColor } from './theme';
 import { API_URL } from './api';
 import Privacy from './Privacy';
 import CloseView from './components/CloseView';
@@ -44,7 +44,7 @@ const LIVE_LINES = [
 export default function App() {
   const [themeMode, setThemeMode] = useState(() => { try { return localStorage.getItem('flipThemeMode') || 'dark'; } catch { return 'dark'; } });
   const theme = themes[themeMode];
-  useEffect(() => { try { localStorage.setItem('flipThemeMode', themeMode); } catch {} document.body.style.background = theme.bg; }, [themeMode]);
+  useEffect(() => { try { localStorage.setItem('flipThemeMode', themeMode); } catch {} document.body.style.background = theme.bg; document.documentElement.style.colorScheme = themeMode; }, [themeMode]);
   const s = useMemo(() => makeStyles(theme), [theme]);
 
   const [session, setSession] = useState(undefined);
@@ -121,6 +121,7 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   const [summaries, setSummaries] = useState({});   // card_id -> payoff summary
   const [owed, setOwed] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState('');
 
   const personNames = { person1: config?.person_1_name || 'Person 1', person2: config?.person_2_name || 'Person 2' };
@@ -163,14 +164,14 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
     await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c), loadOwed()]);
   }, [sync, loadCards, loadItems, loadSnapshot, loadSummaries, loadOwed]);
 
-  useEffect(() => { (async () => { await loadConfig(); await refreshAll(false); })(); }, []);
+  useEffect(() => { (async () => { await loadConfig(); await refreshAll(false); setLoaded(true); })(); }, []);
   // Coming back to Home after a payoff or a mapping change: re-read local state, no Plaid call.
   useEffect(() => { if (view === 'home' && cards.length) { loadSummaries(cards); loadOwed(); loadSnapshot(); } }, [view]);
 
   const showToast = (t) => { setToast(t); setTimeout(() => setToast(''), 2500); };
   const lastSynced = items.reduce((m, i) => i.last_synced && (!m || i.last_synced > m) ? i.last_synced : m, null);
 
-  const props = { theme, s, session, config, setConfig, cards, items, snapshot, summaries, owed, syncing, lastSynced, personNames, bucketLabel, bucketColor,
+  const props = { theme, s, session, config, setConfig, cards, items, snapshot, summaries, owed, syncing, loaded, lastSynced, personNames, bucketLabel, bucketColor,
     refreshAll, loadConfig, loadCards, loadItems, loadOwed, showToast, setView, setCloseCard, themeMode, setThemeMode };
 
   return (
@@ -199,11 +200,12 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
 }
 
 // ─── Home ────────────────────────────────────────────────────────────────────
-function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced, bucketLabel, bucketColor, refreshAll, setView, setCloseCard }) {
+function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced, bucketLabel, bucketColor, refreshAll, setView, setCloseCard, loaded }) {
   const byDue = [...cards].sort((a, b) => (summaries[a.card_id]?.readiness?.days_until_due ?? 99) - (summaries[b.card_id]?.readiness?.days_until_due ?? 99));
   return (
-    <main style={{ padding: '0 1rem' }}>
-      <Header title="Flip" right={<button onClick={() => refreshAll(true)} disabled={syncing} style={s.linkBtn}>{syncing ? 'Syncing…' : `Synced ${relTime(lastSynced)} · Refresh`}</button>} theme={theme} />
+    <main style={{ padding: '0 1rem' }} className="fade">
+      <Header title="Flip" theme={theme} sub={syncing ? 'Syncing with your banks…' : `Synced ${relTime(lastSynced)}`}
+        right={<button onClick={() => refreshAll(true)} disabled={syncing} aria-label="Refresh" style={{ ...s.iconBtn, ...(syncing ? { opacity: 0.5 } : {}) }}><span className={syncing ? 'spin' : ''} style={{ display: 'inline-block' }}>↻</span></button>} />
 
       {owed?.pending_total > 0 && (
         <div style={{ ...s.card, borderColor: theme.warning }}>
@@ -214,23 +216,27 @@ function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced,
       )}
 
       <div style={s.label}>Cards</div>
-      {cards.length === 0 && <div style={s.card}><div style={{ color: theme.textMuted }}>No cards yet. Add one in Settings.</div></div>}
+      {!loaded && cards.length === 0 && [0, 1].map(i => <div key={i} style={{ ...s.card, height: 62 }} className="shimmer" />)}
+      {loaded && cards.length === 0 && <div style={s.card}><div style={{ color: theme.textMuted }}>No cards yet. Add one in Settings.</div></div>}
       {byDue.map(c => {
         const sm = summaries[c.card_id]; const rd = sm?.readiness; const paid = !!sm?.completed;
         const tone = paid ? theme.success : !rd || rd.after_payment == null ? theme.textMuted : rd.short ? theme.danger : rd.below_cushion ? theme.warning : theme.success;
         const status = paid ? 'Paid' : !rd || rd.after_payment == null ? 'Needs a refresh' : rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? 'Covered, under cushion' : 'Covered';
         const due = sm?.period?.due;
         const dueText = rd?.days_until_due == null ? '' : paid ? `next ${fmtDate(due)}` : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : rd.days_until_due === 0 ? 'due today' : `due ${fmtDate(due)} · ${rd.days_until_due}d`;
+        const cc = cardColor(theme, c);
         return (
-          <button key={c.card_id} onClick={() => { setCloseCard(c.card_id); setView('close'); }} style={{ ...s.card, ...s.rowBtn, borderLeft: `4px solid ${tone}` }}>
-            <div style={{ flex: 1, textAlign: 'left' }}>
+          <button key={c.card_id} onClick={() => { setCloseCard(c.card_id); setView('close'); }} style={{ ...s.card, ...s.rowBtn, borderLeft: `4px solid ${cc}` }}>
+            <div style={{ width: 34, height: 24, borderRadius: 5, background: cc, marginRight: 12, flex: '0 0 auto', opacity: 0.95 }} />
+            <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>{c.label}</div>
               <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{dueText}{sm?.needs_review_count ? ` · ${sm.needs_review_count} to review` : ''}</div>
             </div>
-            <div style={{ textAlign: 'right' }}>
+            <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
               <div style={{ fontWeight: 700, color: tone }}>{status}</div>
               <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{sm ? fmt(sm.statement?.amount) : ''}</div>
             </div>
+            <span style={{ color: theme.textDimmed, marginLeft: 8 }}>›</span>
           </button>
         );
       })}
@@ -247,7 +253,7 @@ function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced,
         ))}
         {snapshot && cards.filter(c => snapshot.cards?.[c.card_id]).map(c => (
           <div key={c.card_id} style={{ ...s.row, color: theme.textMuted }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: theme.textDimmed, marginRight: 10 }} />
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: cardColor(theme, c), marginRight: 10 }} />
             <span style={{ flex: 1 }}>{c.label} balance</span>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(snapshot.cards[c.card_id].total)}</span>
           </div>
@@ -276,7 +282,7 @@ function Activity({ theme, s, cards, bucketLabel, bucketColor }) {
   const typeLabel = t => cards.find(c => c.card_id === t)?.label || bucketLabel(t);
   const groups = rows.reduce((g, t) => { (g[t.date] = g[t.date] || []).push(t); return g; }, {});
   return (
-    <main style={{ padding: '0 1rem' }}>
+    <main style={{ padding: '0 1rem' }} className="fade">
       <Header title="Activity" theme={theme} right={
         <select value={filter} onChange={e => setFilter(e.target.value)} style={s.select}>
           <option value="">All accounts</option>
@@ -288,7 +294,7 @@ function Activity({ theme, s, cards, bucketLabel, bucketColor }) {
           <div style={{ ...s.label, marginTop: '0.75rem' }}>{new Date(`${date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
           {txns.map(t => (
             <div key={t.plaid_transaction_id} style={s.row}>
-              <span style={{ width: 8, height: 8, borderRadius: 4, background: bucketColor(t.app_account_type), marginRight: 10, flex: '0 0 auto' }} />
+              <span style={{ width: 8, height: 8, borderRadius: cards.some(c => c.card_id === t.app_account_type) ? 2 : 4, background: cards.some(c => c.card_id === t.app_account_type) ? cardColor(theme, cards.find(c => c.card_id === t.app_account_type)) : bucketColor(t.app_account_type), marginRight: 10, flex: '0 0 auto' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.merchant_name || t.name}</div>
                 <div style={{ fontSize: '0.7rem', color: theme.textDimmed }}>{typeLabel(t.app_account_type)}{t.pending ? ' · pending' : ''}</div>
@@ -336,13 +342,14 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
   const livePlanTotal = form ? LIVE_LINES.reduce((t, [k]) => t + (Number(form[k]) || 0), 0) : 0;
 
   return (
-    <main style={{ padding: '0 1rem' }}>
+    <main style={{ padding: '0 1rem' }} className="fade">
       <Header title="Settings" theme={theme} />
 
       <div style={s.label}>Cards</div>
       <div style={s.card}>
         {cards.map(c => (
           <div key={c.card_id} style={s.row}>
+            <div style={{ width: 28, height: 20, borderRadius: 4, background: cardColor(theme, c), marginRight: 10, flex: '0 0 auto' }} />
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600 }}>{c.label}</div>
               <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>due the {ordinal(c.due_day)} · closes the {c.statement_close_day ? ordinal(c.statement_close_day) : '?'} · paid from {personNames[c.paid_from_bucket] || 'Live'}</div>
@@ -432,9 +439,12 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
 }
 
 // ─── Bits ────────────────────────────────────────────────────────────────────
-const Header = ({ title, right, theme }) => (
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0 0.5rem' }}>
-    <h1 style={{ fontSize: '1.35rem', fontWeight: 800, margin: 0, color: theme.text }}>{title}</h1>{right}
+const Header = ({ title, sub, right, theme }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'calc(1rem + env(safe-area-inset-top)) 0 0.5rem' }}>
+    <div>
+      <h1 style={{ fontSize: '1.5rem', fontWeight: 800, margin: 0, color: theme.text, letterSpacing: -0.3 }}>{title}</h1>
+      {sub && <div style={{ fontSize: '0.75rem', color: theme.textDimmed, marginTop: 2 }}>{sub}</div>}
+    </div>{right}
   </div>
 );
 const Field = ({ label, children }) => <label style={{ display: 'block', fontSize: '0.75rem', opacity: 0.8, marginTop: 6 }}>{label}{children}</label>;
@@ -448,22 +458,34 @@ const makeStyles = (theme) => ({
   row: { display: 'flex', alignItems: 'center', padding: '0.5rem 0', borderBottom: `1px solid ${theme.border}` },
   rowBtn: { display: 'flex', alignItems: 'center', width: '100%', cursor: 'pointer', textAlign: 'left', font: 'inherit' },
   input: { display: 'block', width: '100%', boxSizing: 'border-box', background: theme.cardBgElevated, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.55rem 0.7rem', fontSize: '1rem', margin: '4px 0 8px', fontFamily: 'inherit' },
-  select: { background: theme.cardBgElevated, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.45rem 0.6rem', fontSize: '0.9rem', fontFamily: 'inherit' },
-  primaryBtn: { background: theme.accent, color: theme.onAccent, border: 'none', borderRadius: 10, padding: '0.7rem 1rem', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer', fontFamily: 'inherit' },
-  secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 10, padding: '0.6rem 0.9rem', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'inherit' },
-  linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.85rem', padding: '0.25rem', fontFamily: 'inherit' },
+  select: { background: theme.cardBgElevated, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.5rem 0.6rem', fontSize: '1rem', fontFamily: 'inherit', minHeight: 44 },
+  iconBtn: { background: theme.cardBgElevated, border: `1px solid ${theme.border}`, color: theme.text, width: 44, height: 44, borderRadius: 22, fontSize: '1.25rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  primaryBtn: { background: theme.accent, color: theme.onAccent, border: 'none', borderRadius: 12, padding: '0.8rem 1rem', fontWeight: 600, fontSize: '1rem', cursor: 'pointer', fontFamily: 'inherit', minHeight: 44 },
+  secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '0.7rem 0.9rem', fontWeight: 500, fontSize: '0.95rem', cursor: 'pointer', fontFamily: 'inherit', minHeight: 44 },
+  linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.9rem', padding: '0.5rem 0.25rem', fontFamily: 'inherit', minHeight: 36 },
   note: { background: theme.accentBg, color: theme.textMuted, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.8rem' },
   nav: { position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-around', padding: '0.4rem 0 calc(0.9rem + env(safe-area-inset-bottom))', background: theme.bg, borderTop: `1px solid ${theme.border}`, zIndex: 50 },
-  navBtn: { background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, fontSize: '0.65rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 64 },
+  navBtn: { background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 72, minHeight: 48, borderRadius: 10 },
   toast: { position: 'fixed', bottom: 'calc(5rem + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', background: theme.text, color: theme.bg, padding: '0.5rem 0.9rem', borderRadius: 999, fontSize: '0.85rem', zIndex: 100 },
 });
 
 // Global styles (fonts, resets, keyframes)
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   * { box-sizing: border-box; }
-  body { margin: 0; background: #0F1115; -webkit-font-smoothing: antialiased; }
-  input, select, button { font-family: inherit; }
+  body { margin: 0; -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+  input, select, button { font-family: inherit; touch-action: manipulation; }
+  button { transition: transform .08s ease, filter .12s ease, background .15s ease; }
+  @media (hover: hover) { button:hover:not(:disabled) { filter: brightness(1.08); } }
+  button:active:not(:disabled) { transform: scale(0.98); }
+  input:focus, select:focus { outline: 2px solid rgba(143,184,222,.6); outline-offset: 1px; }
+  .fade { animation: fadeIn .18s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .shimmer { position: relative; overflow: hidden; }
+  .shimmer::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent); animation: shimmer 1.2s infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 `;
 document.head.appendChild(styleSheet);

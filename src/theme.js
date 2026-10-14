@@ -14,8 +14,11 @@ export const themes = {
     danger: '#E07A7A',
     warning: '#D9A75B',
     // Buckets
+    // Buckets: five hues that read apart at a glance
     give: '#B4A7E5', save: '#6CC29A', live: '#8FB8DE',
-    mat: '#4D8BE8', mara: '#E8A0B4',
+    mat: '#3FB8AF', mara: '#E8A0B4',
+    // Cards
+    cardGold: '#E0B55A', cardBlue: '#4C8DF5', cardPink: '#F06DA8',
     dangerBg: 'rgba(224, 122, 122, 0.14)',
     successBg: 'rgba(95, 181, 138, 0.14)',
     accentBg: 'rgba(143, 184, 222, 0.14)',
@@ -36,7 +39,8 @@ export const themes = {
     danger: '#D2544F',
     warning: '#C58A1F',
     give: '#7C6BC9', save: '#2E9E6B', live: '#3F84CC',
-    mat: '#2D64C2', mara: '#C4607F',
+    mat: '#15938A', mara: '#C4607F',
+    cardGold: '#B8860B', cardBlue: '#2A6BD6', cardPink: '#D1458A',
     dangerBg: 'rgba(210, 84, 79, 0.10)',
     successBg: 'rgba(46, 158, 107, 0.10)',
     accentBg: 'rgba(63, 132, 204, 0.10)',
@@ -46,3 +50,12 @@ export const themes = {
 };
 
 export const DEFAULT_FONTS = { body: 'Inter', heading: 'Inter', baseSize: 16, headingWeight: '700' };
+
+// Color for a card by its id or label: gold, blue, pink, then a fallback.
+export function cardColor(theme, card) {
+  const key = `${card?.card_id || ''} ${card?.label || ''}`.toLowerCase();
+  if (/gold|delta/.test(key)) return theme.cardGold;
+  if (/blue/.test(key)) return theme.cardBlue;
+  if (/discover|pink|mara/.test(key)) return theme.cardPink;
+  return theme.accent;
+}
