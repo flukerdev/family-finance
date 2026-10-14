@@ -156,8 +156,10 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
               <button onClick={() => stepPeriod(1)} style={s.iconBtn}>›</button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
-              <Stat label="Statement balance" value={data.statement_balance != null ? fmt(data.statement_balance) : '—'} sub={data.balance_as_of ? `Plaid, ${relTime(data.balance_as_of)}` : 'not synced'} theme={theme} />
-              <Stat label="Charges in window" value={fmt(data.transactions_total)} sub={`${data.transactions.length} transactions${data.pending_count ? `, ${data.pending_count} pending` : ''}`} theme={theme} />
+              {data.statement_balance != null
+                ? <Stat label="Statement balance" value={fmt(data.statement_balance)} sub={`Plaid, ${relTime(data.balance_as_of)}`} theme={theme} />
+                : <Stat label="Card balance now" value={data.current_balance != null ? fmt(data.current_balance) : '—'} sub={data.balance_as_of ? `incl. charges after close, ${relTime(data.balance_as_of)}` : 'not synced'} theme={theme} />}
+              <Stat label="Statement charges" value={fmt(data.transactions_total)} sub={`${data.transactions.length} charges${data.payments?.length ? `, ${data.payments.length} payment${data.payments.length > 1 ? 's' : ''} excluded` : ''}${data.pending_count ? `, ${data.pending_count} pending` : ''}`} theme={theme} />
             </div>
             {mismatch && (
               <div style={{ ...s.note, marginTop: '0.5rem' }}>

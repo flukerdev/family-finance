@@ -213,13 +213,22 @@ router.get('/payoff/:card_id', async (req, res) => {
     ]);
     if (txnErr) return res.status(500).json({ error: txnErr.message });
 
-    const list = (txns || []).filter(t => !t.pending);
+    // Card payments and other credits coming INTO the card are not spending: keep them out of the
+    // allocation and report them separately.
+    const isPayment = t => Number(t.amount) < 0 && /CREDIT_CARD_PAYMENT|^TRANSFER_IN/.test(pfc(t)?.detailed || '');
+    const posted = (txns || []).filter(t => !t.pending);
+    const payments = posted.filter(isPayment);
+    const list = posted.filter(t => !isPayment(t));
     const { rules, overrides } = await loadRulesAndOverrides(req.supabase, list.map(t => t.plaid_transaction_id));
     const allocated = allocateTransactions(list, { rules, overrides, defaultBucket: payingBucket, cardId });
     const { totals, transfers, total } = buildTransfers(allocated, payingBucket);
 
     const snapCard = snap?.cards?.[cardId] || null;
+    // The balance sync falls back to the current balance when Plaid has no last_statement_balance,
+    // so statement === total means "unknown", not "statement equals current".
+    const statementKnown = snapCard && snapCard.statement != null && snapCard.statement !== snapCard.total;
     res.json({
+      payments: payments.map(t => ({ date: t.date, amount: Math.abs(Number(t.amount)), name: t.merchant_name || t.name })),
       card,
       period: { start, end, due: computed.due, computed: start === computed.start && end === computed.end },
       paying_bucket: payingBucket,
@@ -228,7 +237,7 @@ router.get('/payoff/:card_id', async (req, res) => {
       totals,
       transfers,
       transactions_total: total,
-      statement_balance: snapCard?.statement ?? null,
+      statement_balance: statementKnown ? snapCard.statement : null,
       current_balance: snapCard?.total ?? null,
       balance_as_of: snap?.created_at || null,
       completed: prior || null,
@@ -274,7 +283,7 @@ router.get('/pnl', async (req, res) => {
       const cat = pfc(t);
       const detailed = cat?.detailed || '';
       const primary = cat?.primary || 'OTHER';
-      const type = t.app_account_type || 'unmapped';
+      const type = ({ mat: 'person1', mara: 'person2' })[t.app_account_type] || t.app_account_type || 'unmapped';
       const onCard = isCardType(type, cardIds);
 
       if (INTERNAL_DETAILED.has(detailed) || (onCard && Number(t.amount) < 0 && /PAYMENT|TRANSFER/.test(detailed))) {
