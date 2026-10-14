@@ -5411,7 +5411,9 @@ export default function App() {
           creditCards={getEffectiveCreditCards()}
           config={config}
           onRefresh={async () => {
-            await Promise.all([syncTransactions(true, true), syncBalances(true, true)]);
+            // Transactions are flat-rate per account, so force is free; Balance is billed per call,
+            // so respect the 1-hour throttle.
+            await Promise.all([syncTransactions(true, true), syncBalances(true, false)]);
             await Promise.all([fetchSnapshots(true), fetchCreditCards()]);
           }}
         />

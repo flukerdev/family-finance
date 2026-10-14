@@ -77,13 +77,39 @@ function matchRule(txn, rules, cardId) {
   return sorted.find(r => hay.includes(r.pattern.toLowerCase())) || null;
 }
 
+// A rule becomes trusted after this many consistent confirmations; below that the
+// charge still gets the rule's bucket but shows up in the review queue.
+export const TRUSTED_CONFIDENCE = 2;
+
 export function allocateTransactions(txns, { rules, overrides, defaultBucket, cardId }) {
   return txns.map(t => {
     const override = overrides[t.plaid_transaction_id];
-    if (override) return { ...t, bucket: override.bucket, source: 'manual', note: override.note || null };
+    if (override) return { ...t, bucket: override.bucket, source: 'manual', confidence: 99, needs_review: false, note: override.note || null };
     const rule = matchRule(t, rules, cardId);
-    if (rule) return { ...t, bucket: rule.bucket, source: 'rule', rule_id: rule.id, rule_pattern: rule.pattern };
-    return { ...t, bucket: defaultBucket, source: 'default' };
+    if (rule) {
+      const c = rule.confidence ?? 1;
+      return { ...t, bucket: rule.bucket, source: 'rule', rule_id: rule.id, rule_pattern: rule.pattern, confidence: c, needs_review: c < TRUSTED_CONFIDENCE };
+    }
+    return { ...t, bucket: defaultBucket, source: 'default', confidence: 0, needs_review: true };
+  });
+}
+
+// Confidence = how many of the user's own decisions agree with the rule. Derived from
+// transaction_allocations joined to transactions by merchant, so no extra schema is needed.
+async function attachConfidence(supabase, rules) {
+  if (!rules.length) return rules;
+  const { data: allocs } = await supabase.from('transaction_allocations').select('plaid_transaction_id, bucket');
+  if (!allocs?.length) return rules.map(r => ({ ...r, confidence: 1 }));
+  const ids = allocs.map(a => a.plaid_transaction_id);
+  const names = {};
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await supabase.from('transactions').select('plaid_transaction_id, merchant_name, name').in('plaid_transaction_id', ids.slice(i, i + 200));
+    (data || []).forEach(t => { names[t.plaid_transaction_id] = `${t.merchant_name || ''} ${t.name || ''}`.toLowerCase(); });
+  }
+  return rules.map(r => {
+    const pat = r.pattern.toLowerCase();
+    const agree = allocs.filter(a => a.bucket === r.bucket && (names[a.plaid_transaction_id] || '').includes(pat)).length;
+    return { ...r, confidence: Math.max(1, agree) };
   });
 }
 
@@ -108,7 +134,7 @@ async function loadRulesAndOverrides(supabase, txnIds) {
   ]);
   const overrideMap = {};
   (overrides || []).forEach(o => { overrideMap[o.plaid_transaction_id] = o; });
-  return { rules: rules || [], overrides: overrideMap };
+  return { rules: await attachConfidence(supabase, rules || []), overrides: overrideMap };
 }
 
 async function loadCard(supabase, cardId) {
@@ -129,7 +155,7 @@ function cardTxnQuery(supabase, cardId, start, end) {
 router.get('/payoff/rules', async (req, res) => {
   const { data, error } = await req.supabase.from('allocation_rules').select('*').order('pattern');
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ rules: data || [] });
+  res.json({ rules: await attachConfidence(req.supabase, data || []), trusted_at: TRUSTED_CONFIDENCE });
 });
 
 router.post('/payoff/rules', async (req, res) => {
@@ -151,7 +177,7 @@ router.delete('/payoff/rules/:id', async (req, res) => {
 
 // ─── Allocate one transaction (and optionally save it as a rule) ─────────────
 router.post('/payoff/allocate', async (req, res) => {
-  const { plaid_transaction_id, bucket, note = null, save_rule = false, card_id = null } = req.body || {};
+  const { plaid_transaction_id, bucket, note = null, save_rule = true, card_id = null } = req.body || {};
   if (!plaid_transaction_id) return res.status(400).json({ error: 'plaid_transaction_id required' });
   if (!BUCKETS.includes(bucket)) return res.status(400).json({ error: `bucket must be one of ${BUCKETS.join(', ')}` });
 
@@ -187,6 +213,18 @@ router.post('/payoff/complete', async (req, res) => {
   res.json({ payoff: data });
 });
 
+// Record the official statement balance for a period (from the Amex/Discover statement).
+// Stored on the payoffs row with paid_at NULL until the payoff is completed.
+router.post('/payoff/statement', async (req, res) => {
+  const { card_id, period_start, period_end, due_date = null, statement_amount } = req.body || {};
+  if (!card_id || !period_start || !period_end || !(Number(statement_amount) >= 0)) return res.status(400).json({ error: 'card_id, period_start, period_end, statement_amount required' });
+  const { data: existing } = await req.supabase.from('payoffs').select('paid_at').eq('card_id', card_id).eq('period_end', period_end).maybeSingle();
+  const row = { user_id: req.userId, card_id, period_start, period_end, due_date, statement_amount: num(statement_amount), paid_at: existing?.paid_at || null };
+  const { data, error } = await req.supabase.from('payoffs').upsert(row, { onConflict: 'user_id,card_id,period_end' }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ payoff: data });
+});
+
 router.get('/payoff/history', async (req, res) => {
   const { data, error } = await req.supabase.from('payoffs').select('*').order('period_end', { ascending: false }).limit(36);
   if (error) return res.status(500).json({ error: error.message });
@@ -206,10 +244,11 @@ router.get('/payoff/:card_id', async (req, res) => {
     const end = dateRe.test(req.query.end || '') ? req.query.end : computed.end;
     const payingBucket = card.paid_from_bucket || 'live';
 
-    const [{ data: txns, error: txnErr }, { data: snap }, { data: prior }] = await Promise.all([
+    const [{ data: txns, error: txnErr }, { data: snap }, { data: prior }, { data: cfg }] = await Promise.all([
       cardTxnQuery(req.supabase, cardId, start, end),
-      req.supabase.from('balance_snapshots').select('cards, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      req.supabase.from('balance_snapshots').select('buckets, cards, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       req.supabase.from('payoffs').select('*').eq('card_id', cardId).eq('period_end', end).maybeSingle(),
+      req.supabase.from('app_config').select('cushion').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]);
     if (txnErr) return res.status(500).json({ error: txnErr.message });
 
@@ -223,11 +262,35 @@ router.get('/payoff/:card_id', async (req, res) => {
     const allocated = allocateTransactions(list, { rules, overrides, defaultBucket: payingBucket, cardId });
     const { totals, transfers, total } = buildTransfers(allocated, payingBucket);
 
+    // Statement amount: what you typed from the statement > Plaid's statement balance > window total.
+    // Window totals go by transaction date and can miss credits that Amex posted to a different
+    // statement, so the difference is attributed to the paying bucket rather than hidden.
     const snapCard = snap?.cards?.[cardId] || null;
+    const plaidStatement = snapCard && snapCard.statement != null && snapCard.statement !== snapCard.total ? snapCard.statement : null;
+    const enteredStatement = prior?.statement_amount != null ? Number(prior.statement_amount) : null;
+    const statementAmount = enteredStatement ?? plaidStatement ?? total;
+    const statementSource = enteredStatement != null ? 'entered' : plaidStatement != null ? 'plaid' : 'window';
+    const difference = num(statementAmount - total);
+    const payingBalance = snap?.buckets?.[payingBucket] ?? null;
+    const transfersIn = num(transfers.reduce((s, t) => s + t.amount, 0));
+    const cushion = Number(cfg?.cushion ?? 0);
+    const afterPayment = payingBalance != null ? num(payingBalance + transfersIn - statementAmount) : null;
+    const daysUntilDue = computed.due ? Math.round((parse(computed.due) - parse(ymd(new Date()))) / 86400000) : null;
+    const needsReview = allocated.filter(t => t.needs_review);
     // The balance sync falls back to the current balance when Plaid has no last_statement_balance,
     // so statement === total means "unknown", not "statement equals current".
-    const statementKnown = snapCard && snapCard.statement != null && snapCard.statement !== snapCard.total;
     res.json({
+      statement: { amount: statementAmount, source: statementSource, difference, entered: enteredStatement, plaid: plaidStatement },
+      readiness: {
+        paying_balance: payingBalance, transfers_in: transfersIn, after_payment: afterPayment, cushion,
+        shortfall: afterPayment != null ? Math.max(0, num(cushion - afterPayment)) : null,
+        short: afterPayment != null && afterPayment < 0,
+        below_cushion: afterPayment != null && afterPayment >= 0 && afterPayment < cushion,
+        days_until_due: daysUntilDue,
+        balances_as_of: snap?.created_at || null,
+      },
+      needs_review_count: needsReview.length,
+      needs_review_ids: needsReview.map(t => t.plaid_transaction_id),
       payments: payments.map(t => ({ date: t.date, amount: Math.abs(Number(t.amount)), name: t.merchant_name || t.name })),
       card,
       period: { start, end, due: computed.due, computed: start === computed.start && end === computed.end },
@@ -237,10 +300,10 @@ router.get('/payoff/:card_id', async (req, res) => {
       totals,
       transfers,
       transactions_total: total,
-      statement_balance: statementKnown ? snapCard.statement : null,
+      statement_balance: plaidStatement,
       current_balance: snapCard?.total ?? null,
       balance_as_of: snap?.created_at || null,
-      completed: prior || null,
+      completed: prior?.paid_at ? prior : null,
     });
   } catch (err) {
     console.error('GET /api/payoff/:card_id', err);

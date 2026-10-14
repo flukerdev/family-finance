@@ -54,7 +54,11 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  const [picker, setPicker] = useState(null);         // transaction being reallocated
+  const [picker, setPicker] = useState(null);         // transaction being reallocated from the list
+  const [reviewing, setReviewing] = useState(false);  // card-stack review queue open
+  const [editingStatement, setEditingStatement] = useState(false);
+  const [statementInput, setStatementInput] = useState('');
+  const [showCharges, setShowCharges] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [rules, setRules] = useState([]);
 
@@ -74,41 +78,39 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   };
   useEffect(() => { load(); }, [cardId, range?.start, range?.end]);
 
-  const loadRules = async () => {
-    const r = await authFetch(`${apiUrl}/api/payoff/rules`); const j = await r.json(); setRules(j.rules || []);
-  };
+  const loadRules = async () => { const r = await authFetch(`${apiUrl}/api/payoff/rules`); const j = await r.json(); setRules(j.rules || []); };
   useEffect(() => { if (showRules) loadRules(); }, [showRules]);
 
-  const refresh = async () => {
-    setRefreshing(true);
-    try { await onRefresh?.(); await load(); } finally { setRefreshing(false); }
-  };
+  const refresh = async () => { setRefreshing(true); try { await onRefresh?.(); await load(); } finally { setRefreshing(false); } };
 
-  const allocate = async (txn, bucket, saveRule) => {
-    setPicker(null);
-    // optimistic
-    setData(d => d && ({ ...d, transactions: d.transactions.map(t => t.plaid_transaction_id === txn.plaid_transaction_id ? { ...t, bucket, source: 'manual' } : t) }));
+  // Allocate one charge. Every decision also teaches a merchant rule (save_rule defaults true server-side).
+  const allocate = async (txn, bucket, { reload = true } = {}) => {
+    setData(d => d && ({ ...d, transactions: d.transactions.map(t => t.plaid_transaction_id === txn.plaid_transaction_id ? { ...t, bucket, source: 'manual', needs_review: false } : t) }));
     await authFetch(`${apiUrl}/api/payoff/allocate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plaid_transaction_id: txn.plaid_transaction_id, bucket, save_rule: saveRule, card_id: saveRule ? null : undefined }),
+      body: JSON.stringify({ plaid_transaction_id: txn.plaid_transaction_id, bucket, card_id: null }),
     });
-    await load();
+    if (reload) await load();
   };
 
-  const deleteRule = async (id) => {
-    await authFetch(`${apiUrl}/api/payoff/rules/${id}`, { method: 'DELETE' });
-    await loadRules(); await load();
+  const saveStatement = async () => {
+    const amt = Number(String(statementInput).replace(/[^0-9.]/g, ''));
+    if (!(amt >= 0) || !data) return;
+    await authFetch(`${apiUrl}/api/payoff/statement`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due, statement_amount: amt }),
+    });
+    setEditingStatement(false); await load();
   };
+
+  const deleteRule = async (id) => { await authFetch(`${apiUrl}/api/payoff/rules/${id}`, { method: 'DELETE' }); await loadRules(); await load(); };
 
   const complete = async () => {
     if (!data) return;
-    const amount = data.statement_balance ?? data.transactions_total;
     await authFetch(`${apiUrl}/api/payoff/complete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due,
-        statement_amount: amount, allocations: data.totals, transfers: data.transfers,
-      }),
+      body: JSON.stringify({ card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due,
+        statement_amount: data.statement.amount, allocations: data.totals, transfers: data.transfers }),
     });
     await load();
   };
@@ -122,19 +124,23 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
 
   if (!cards.length) return <Empty theme={theme} text="No cards configured yet. Connect a card under Accounts and map it as a credit card." />;
 
+  const card = cards.find(c => c.card_id === cardId);
   const payingLabel = data ? bucketMeta[data.paying_bucket]?.label || data.paying_bucket : '';
-  const toPay = data ? (data.statement_balance ?? data.transactions_total) : 0;
-  const mismatch = data && data.statement_balance != null && Math.abs(data.statement_balance - data.transactions_total) > 0.5;
+  const rd = data?.readiness;
+  const st = data?.statement;
+  const reviewQueue = data ? data.transactions.filter(t => t.needs_review) : [];
+  const tone = !rd || rd.after_payment == null ? 'neutral' : rd.short ? 'danger' : rd.below_cushion ? 'warning' : 'ok';
+  const toneColor = { danger: theme.danger, warning: theme.warning, ok: theme.success, neutral: theme.textMuted }[tone];
+  const dueText = rd?.days_until_due == null ? '' : rd.days_until_due === 0 ? 'due today' : rd.days_until_due === 1 ? 'due tomorrow' : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : `due in ${rd.days_until_due} days`;
 
   return (
     <>
       {/* Card chips */}
       <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', padding: '0.5rem 0' }}>
         {cards.map(c => (
-          <button key={c.card_id} onClick={() => { setCardId(c.card_id); setRange(null); }}
+          <button key={c.card_id} onClick={() => { setCardId(c.card_id); setRange(null); setEditingStatement(false); }}
             style={{ ...s.chip, ...(c.card_id === cardId ? s.chipActive : {}) }}>
-            {c.label || c.card_id}
-            <span style={{ fontSize: '0.65rem', opacity: 0.8, marginLeft: 6 }}>due {ordinal(c.due_day)}</span>
+            {c.label || c.card_id}<span style={{ fontSize: '0.65rem', opacity: 0.8, marginLeft: 6 }}>due {ordinal(c.due_day)}</span>
           </button>
         ))}
       </div>
@@ -144,34 +150,83 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
 
       {data && (
         <>
-          {/* Statement header */}
-          <div style={s.card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button onClick={() => stepPeriod(-1)} style={s.iconBtn}>‹</button>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.7rem', color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>Statement</div>
-                <div style={{ fontWeight: 600 }}>{fmtDate(data.period.start)} – {fmtDate(data.period.end)}</div>
-                {data.period.due && <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>Due {fmtDateLong(data.period.due)}</div>}
+          {/* ── 1. Readiness: the one thing that matters ── */}
+          <div style={{ ...s.card, borderColor: toneColor, borderWidth: 2 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{card?.label}</div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: toneColor }}>{dueText && `${fmtDateLong(data.period.due)} · ${dueText}`}</div>
+            </div>
+
+            {rd?.after_payment == null ? (
+              <div style={{ ...s.note, marginTop: '0.6rem' }}>No balance for {payingLabel} yet. Tap Refresh to pull balances from Plaid.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: '1.9rem', fontWeight: 800, color: toneColor, marginTop: '0.4rem', fontVariantNumeric: 'tabular-nums' }}>
+                  {rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? `${fmt(rd.after_payment)} left, under cushion` : `Covered, ${fmt(rd.after_payment)} left`}
+                </div>
+                <div style={{ fontSize: '0.85rem', color: theme.textMuted }}>
+                  {rd.short
+                    ? `${payingLabel} needs ${fmt(-rd.after_payment)} more before you can pay this card${rd.cushion ? `, ${fmt(rd.shortfall)} to keep the ${fmt(rd.cushion)} cushion` : ''}.`
+                    : rd.below_cushion ? `Payable, but ${payingLabel} drops below the ${fmt(rd.cushion)} cushion.` : `${payingLabel} can pay this and keep the cushion.`}
+                </div>
+                <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 4, fontSize: '0.9rem', fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ color: theme.textMuted }}>{payingLabel} today</span><span>{fmt(rd.paying_balance)}</span>
+                  <span style={{ color: theme.textMuted }}>+ transfers in</span><span style={{ color: theme.success }}>{fmt(rd.transfers_in)}</span>
+                  <span style={{ color: theme.textMuted }}>− statement</span><span style={{ color: theme.danger }}>{fmt(st.amount)}</span>
+                  <span style={{ fontWeight: 600, borderTop: `1px solid ${theme.border}`, paddingTop: 4 }}>After paying</span><span style={{ fontWeight: 700, color: toneColor, borderTop: `1px solid ${theme.border}`, paddingTop: 4 }}>{fmt(rd.after_payment)}</span>
+                </div>
+              </>
+            )}
+
+            {/* Statement line */}
+            <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.7rem', background: theme.cardBgElevated, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.7rem', color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>Statement {fmtDate(data.period.start)} – {fmtDate(data.period.end)}</div>
+                {editingStatement ? (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                    <input autoFocus inputMode="decimal" value={statementInput} onChange={e => setStatementInput(e.target.value)} placeholder="Balance from your statement"
+                      onKeyDown={e => e.key === 'Enter' && saveStatement()}
+                      style={{ flex: 1, background: theme.cardBg, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.4rem 0.6rem', fontSize: '1rem' }} />
+                    <button onClick={saveStatement} style={{ ...s.primaryBtn, padding: '0.4rem 0.8rem' }}>Save</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>{fmt(st.amount)}</span>
+                    <span style={{ fontSize: '0.75rem', color: theme.textDimmed }}>
+                      {st.source === 'entered' ? 'from your statement' : st.source === 'plaid' ? 'from Plaid' : 'sum of charges, confirm against your statement'}
+                    </span>
+                  </div>
+                )}
               </div>
-              <button onClick={() => stepPeriod(1)} style={s.iconBtn}>›</button>
+              {!editingStatement && <button onClick={() => { setStatementInput(st.entered ?? ''); setEditingStatement(true); }} style={s.linkBtn}>{st.source === 'entered' ? 'edit' : 'enter'}</button>}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
-              {data.statement_balance != null
-                ? <Stat label="Statement balance" value={fmt(data.statement_balance)} sub={`Plaid, ${relTime(data.balance_as_of)}`} theme={theme} />
-                : <Stat label="Card balance now" value={data.current_balance != null ? fmt(data.current_balance) : '—'} sub={data.balance_as_of ? `incl. charges after close, ${relTime(data.balance_as_of)}` : 'not synced'} theme={theme} />}
-              <Stat label="Statement charges" value={fmt(data.transactions_total)} sub={`${data.transactions.length} charges${data.payments?.length ? `, ${data.payments.length} payment${data.payments.length > 1 ? 's' : ''} excluded` : ''}${data.pending_count ? `, ${data.pending_count} pending` : ''}`} theme={theme} />
-            </div>
-            {mismatch && (
-              <div style={{ ...s.note, marginTop: '0.5rem' }}>
-                Statement and window differ by {fmt(Math.abs(data.statement_balance - data.transactions_total))}. Adjust the window with ‹ › until they match, or check your close day in Settings.
+            {Math.abs(st.difference) > 0.5 && (
+              <div style={{ fontSize: '0.75rem', color: theme.textMuted, marginTop: 6 }}>
+                Charges in this window total {fmt(data.transactions_total)}; the {fmt(Math.abs(st.difference))} {st.difference > 0 ? 'extra' : 'less'} on the statement is counted against {payingLabel} (usually a credit or charge Amex posted to a neighboring statement).
               </div>
             )}
-            <button onClick={refresh} disabled={refreshing} style={{ ...s.secondaryBtn, marginTop: '0.75rem', width: '100%' }}>
-              {refreshing ? 'Pulling from Plaid…' : 'Refresh from Plaid'}
-            </button>
+            <div style={{ display: 'flex', gap: 8, marginTop: '0.75rem' }}>
+              <button onClick={() => stepPeriod(-1)} style={s.iconBtn}>‹</button>
+              <button onClick={refresh} disabled={refreshing} style={{ ...s.secondaryBtn, flex: 1 }}>{refreshing ? 'Pulling from Plaid…' : 'Refresh from Plaid'}</button>
+              <button onClick={() => stepPeriod(1)} style={s.iconBtn}>›</button>
+            </div>
           </div>
 
-          {/* Transfers */}
+          {/* ── 2. Review queue ── */}
+          {reviewQueue.length > 0 ? (
+            <button onClick={() => setReviewing(true)} style={{ ...s.card, width: '100%', textAlign: 'left', cursor: 'pointer', borderColor: theme.accent, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 20, background: theme.accent, color: theme.onAccent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{reviewQueue.length}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>{reviewQueue.length === 1 ? '1 charge needs' : `${reviewQueue.length} charges need`} a bucket</div>
+                <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>Tap through them. Each answer teaches a rule, so this list shrinks every month.</div>
+              </div>
+              <span style={{ color: theme.accent, fontSize: '1.4rem' }}>›</span>
+            </button>
+          ) : (
+            <div style={{ ...s.note, background: theme.successBg, color: theme.successLight, margin: '0.6rem 0' }}>Every charge on this statement has a bucket.</div>
+          )}
+
+          {/* ── 3. Transfers ── */}
           <div style={s.card}>
             <div style={s.sectionTitle}>Transfers to make</div>
             {data.transfers.length === 0
@@ -180,19 +235,19 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
                 <div key={i} style={s.transferRow}>
                   <Dot color={bucketMeta[t.from]?.color} />
                   <span style={{ flex: 1 }}>{bucketMeta[t.from]?.label || t.from} → {bucketMeta[t.to]?.label || t.to}</span>
-                  <strong>{fmt(t.amount)}</strong>
+                  <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(t.amount)}</strong>
                 </div>
               ))}
             <div style={{ ...s.transferRow, borderTop: `1px solid ${theme.border}`, marginTop: '0.5rem', paddingTop: '0.5rem' }}>
               <span style={{ flex: 1 }}>Then pay the card from {payingLabel}</span>
-              <strong style={{ fontSize: '1.1rem' }}>{fmt(toPay)}</strong>
+              <strong style={{ fontSize: '1.1rem', fontVariantNumeric: 'tabular-nums' }}>{fmt(st.amount)}</strong>
             </div>
             {data.completed
               ? <div style={{ ...s.note, background: theme.successBg, color: theme.successLight, marginTop: '0.75rem' }}>Marked paid {relTime(data.completed.paid_at)} · {fmt(data.completed.statement_amount)}</div>
               : <button onClick={complete} style={{ ...s.primaryBtn, marginTop: '0.75rem', width: '100%' }}>I made these transfers and paid the card</button>}
           </div>
 
-          {/* By bucket */}
+          {/* ── 4. Detail (collapsed by default) ── */}
           <div style={s.card}>
             <div style={s.sectionTitle}>By bucket</div>
             {BUCKET_ORDER.filter(b => data.totals[b] != null).map(b => (
@@ -200,31 +255,28 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
             ))}
           </div>
 
-          {/* Transactions */}
-          <div style={{ ...s.sectionTitle, padding: '0.5rem 0.25rem 0.25rem' }}>Review each charge <span style={{ fontWeight: 400, color: theme.textMuted }}>· tap a bucket to change it</span></div>
-          {data.transactions.length === 0 && <Empty theme={theme} text="No transactions in this window yet. Tap Refresh from Plaid." />}
-          {data.transactions.map(t => (
+          <button onClick={() => setShowCharges(v => !v)} style={s.linkBtn}>{showCharges ? 'Hide' : 'Show'} all {data.transactions.length} charges{data.payments?.length ? ` (${data.payments.length} payment${data.payments.length > 1 ? 's' : ''} excluded)` : ''} {showCharges ? '▾' : '▸'}</button>
+          {showCharges && data.transactions.map(t => (
             <div key={t.plaid_transaction_id} style={s.txnRow}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.merchant_name || t.name}</div>
-                <div style={{ fontSize: '0.7rem', color: theme.textDimmed }}>{fmtDate(t.date)}{t.source === 'rule' ? ` · rule "${t.rule_pattern}"` : t.source === 'manual' ? ' · set by you' : ''}</div>
+                <div style={{ fontSize: '0.7rem', color: theme.textDimmed }}>{fmtDate(t.date)}{t.source === 'rule' ? ` · rule "${t.rule_pattern}"${t.needs_review ? ' (new)' : ''}` : t.source === 'manual' ? ' · set by you' : ' · needs review'}</div>
               </div>
               <div style={{ textAlign: 'right', marginLeft: 8 }}>
                 <div style={{ fontWeight: 600, color: t.amount < 0 ? theme.success : theme.text }}>{t.amount < 0 ? '+' : ''}{fmt(Math.abs(t.amount))}</div>
-                <button onClick={() => setPicker(t)} style={{ ...s.bucketTag, background: bucketMeta[t.bucket]?.color || theme.accent }}>{bucketMeta[t.bucket]?.label || t.bucket}</button>
+                <button onClick={() => setPicker(t)} style={{ ...s.bucketTag, background: bucketMeta[t.bucket]?.color || theme.accent, opacity: t.needs_review ? 0.6 : 1 }}>{bucketMeta[t.bucket]?.label || t.bucket}</button>
               </div>
             </div>
           ))}
 
-          <button onClick={() => setShowRules(v => !v)} style={{ ...s.linkBtn, marginTop: '1rem' }}>{showRules ? 'Hide rules' : `Manage rules`}</button>
+          <button onClick={() => setShowRules(v => !v)} style={{ ...s.linkBtn, marginTop: '0.5rem' }}>{showRules ? 'Hide rules' : 'Rules it has learned'} {showRules ? '▾' : '▸'}</button>
           {showRules && (
             <div style={s.card}>
-              <div style={s.sectionTitle}>Allocation rules</div>
-              {rules.length === 0 && <p style={{ color: theme.textMuted }}>No rules yet. When you reassign a charge, tick "always" to create one.</p>}
+              {rules.length === 0 && <p style={{ color: theme.textMuted }}>No rules yet. Every bucket you pick teaches one.</p>}
               {rules.map(r => (
                 <div key={r.id} style={s.transferRow}>
                   <Dot color={bucketMeta[r.bucket]?.color} />
-                  <span style={{ flex: 1 }}>"{r.pattern}" → {bucketMeta[r.bucket]?.label || r.bucket}{r.card_id ? ` (${r.card_id} only)` : ''}</span>
+                  <span style={{ flex: 1, fontSize: '0.9rem' }}>"{r.pattern}" → {bucketMeta[r.bucket]?.label || r.bucket} <span style={{ color: theme.textDimmed, fontSize: '0.75rem' }}>· {r.confidence >= 2 ? 'trusted' : 'learning'} ({r.confidence})</span></span>
                   <button onClick={() => deleteRule(r.id)} style={s.linkBtn}>remove</button>
                 </div>
               ))}
@@ -234,33 +286,70 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
       )}
 
       {picker && (
-        <BucketPicker txn={picker} bucketMeta={bucketMeta} theme={theme} s={s}
-          onClose={() => setPicker(null)} onPick={(bucket, saveRule) => allocate(picker, bucket, saveRule)} />
+        <BucketPicker txn={picker} bucketMeta={bucketMeta} theme={theme} s={s} onClose={() => setPicker(null)}
+          onPick={(bucket) => { setPicker(null); allocate(picker, bucket); }} />
+      )}
+      {reviewing && data && (
+        <ReviewStack queue={data.transactions.filter(t => t.needs_review)} bucketMeta={bucketMeta} theme={theme} s={s}
+          onPick={(txn, bucket) => allocate(txn, bucket, { reload: false })}
+          onClose={async () => { setReviewing(false); await load(); }} />
       )}
     </>
   );
 }
 
+// One charge at a time. Suggested bucket is pre-highlighted; tapping it confirms (and raises
+// the rule's confidence), tapping another re-teaches the rule.
+function ReviewStack({ queue, bucketMeta, theme, s, onPick, onClose }) {
+  const [i, setI] = useState(0);
+  const [items] = useState(queue);
+  const txn = items[i];
+  useEffect(() => { if (!txn) onClose(); }, [txn]);
+  if (!txn) return null;
+  const pick = async (b) => { await onPick(txn, b); setI(n => n + 1); };
+  let cat = null; try { cat = JSON.parse(txn.personal_finance_category || 'null'); } catch {}
+  return (
+    <div style={{ ...s.sheetBackdrop, alignItems: 'center' }} onClick={onClose}>
+      <div style={{ ...s.sheet, borderRadius: 18, maxWidth: 440, margin: '0 1rem' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.textMuted, marginBottom: '0.75rem' }}>
+          <span>{i + 1} of {items.length}</span><button onClick={onClose} style={{ ...s.linkBtn, padding: 0 }}>Done for now</button>
+        </div>
+        <div style={{ height: 4, background: theme.cardBgElevated, borderRadius: 2, marginBottom: '1rem' }}><div style={{ width: `${(i / items.length) * 100}%`, height: '100%', background: theme.accent, borderRadius: 2, transition: 'width .2s' }} /></div>
+        <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>{fmtDateLong(txn.date)}{cat?.primary ? ` · ${titleCase(cat.primary)}` : ''}</div>
+        <div style={{ fontSize: '1.25rem', fontWeight: 700, margin: '0.15rem 0' }}>{txn.merchant_name || txn.name}</div>
+        <div style={{ fontSize: '2rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: txn.amount < 0 ? theme.success : theme.text }}>{txn.amount < 0 ? '+' : ''}{fmt(Math.abs(txn.amount))}</div>
+        <div style={{ fontSize: '0.8rem', color: theme.textMuted, margin: '0.5rem 0 0.75rem' }}>
+          {txn.source === 'rule' ? `Guess: ${bucketMeta[txn.bucket]?.label} (rule "${txn.rule_pattern}", still learning). Confirm or correct.` : 'Who pays for this?'}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+          {BUCKET_ORDER.map(b => (
+            <button key={b} onClick={() => pick(b)}
+              style={{ ...s.secondaryBtn, padding: '0.85rem', fontSize: '1rem', borderColor: bucketMeta[b].color, ...(txn.bucket === b && txn.source !== 'default' ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
+              {bucketMeta[b].label}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setI(n => n + 1)} style={{ ...s.linkBtn, width: '100%', marginTop: '0.75rem' }}>Skip this one</button>
+      </div>
+    </div>
+  );
+}
+
 function BucketPicker({ txn, bucketMeta, theme, s, onClose, onPick }) {
-  const [always, setAlways] = useState(false);
   const merchant = txn.merchant_name || txn.name;
   return (
     <div style={s.sheetBackdrop} onClick={onClose}>
       <div style={s.sheet} onClick={e => e.stopPropagation()}>
         <div style={{ fontWeight: 600, marginBottom: 2 }}>{merchant}</div>
-        <div style={{ fontSize: '0.8rem', color: theme.textMuted, marginBottom: '0.75rem' }}>{fmt(Math.abs(txn.amount))} · {fmtDateLong(txn.date)} · who pays for this?</div>
+        <div style={{ fontSize: '0.8rem', color: theme.textMuted, marginBottom: '0.75rem' }}>{fmt(Math.abs(txn.amount))} · {fmtDateLong(txn.date)} · who pays for this? (also teaches the rule for "{merchant}")</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
           {BUCKET_ORDER.map(b => (
-            <button key={b} onClick={() => onPick(b, always)}
-              style={{ ...s.secondaryBtn, borderColor: bucketMeta[b].color, ...(txn.bucket === b ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
+            <button key={b} onClick={() => onPick(b)}
+              style={{ ...s.secondaryBtn, padding: '0.8rem', borderColor: bucketMeta[b].color, ...(txn.bucket === b ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
               {bucketMeta[b].label}
             </button>
           ))}
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', fontSize: '0.85rem', color: theme.textMuted }}>
-          <input type="checkbox" checked={always} onChange={e => setAlways(e.target.checked)} />
-          Always put "{merchant}" there
-        </label>
       </div>
     </div>
   );
@@ -417,6 +506,6 @@ const makeStyles = (theme) => ({
   transferRow: { display: 'flex', alignItems: 'center', padding: '0.35rem 0', fontSize: '0.95rem' },
   txnRow: { display: 'flex', alignItems: 'center', padding: '0.6rem 0.25rem', borderBottom: `1px solid ${theme.border}`, color: theme.text },
   bucketTag: { border: 'none', color: theme.onAccent, borderRadius: 999, padding: '0.15rem 0.6rem', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', marginTop: 2 },
-  sheetBackdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end', zIndex: 50 },
-  sheet: { width: '100%', maxWidth: 520, margin: '0 auto', background: theme.cardBg, color: theme.text, borderRadius: '16px 16px 0 0', padding: '1rem 1rem 1.5rem', border: `1px solid ${theme.border}` },
+  sheetBackdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', zIndex: 2000 },
+  sheet: { width: '100%', maxWidth: 520, margin: '0 auto', background: theme.cardBg, color: theme.text, borderRadius: '16px 16px 0 0', padding: '1rem 1rem calc(1.5rem + env(safe-area-inset-bottom))', border: `1px solid ${theme.border}`, maxHeight: '85vh', overflowY: 'auto' },
 });
