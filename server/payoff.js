@@ -359,6 +359,21 @@ router.get('/payoff/:card_id', async (req, res) => {
     const afterPayment = payingBalance != null ? num(payingBalance + transfersIn - statementAmount) : null;
     const daysUntilDue = computed.due ? Math.round((parse(computed.due) - parse(todayLocal())) / 86400000) : null;
     const needsReview = allocated.filter(t => t.needs_review);
+
+    // Did a payment for this statement already hit the card? Look for a card payment posted after the
+    // close date that matches the statement amount (or at least covers the window). That makes a card
+    // you paid outside the app show as Paid instead of overdue.
+    let autoPaid = null;
+    if (!prior?.paid_at) {
+      const { data: laterPays } = await req.supabase.from('transactions').select('date, amount, name, personal_finance_category')
+        .in('app_account_type', [cardId, `${cardId}_total`]).gt('date', end).lte('date', addDays(end, 60)).lt('amount', 0).eq('pending', false);
+      const pays = (laterPays || []).filter(t => /CREDIT_CARD_PAYMENT/.test(pfc(t)?.detailed || ''));
+      const target = statementAmount;
+      const hit = pays.find(t => Math.abs(Math.abs(Number(t.amount)) - target) <= Math.max(1, target * 0.01))
+        || pays.find(t => Math.abs(Number(t.amount)) >= Math.max(1, total * 0.9));
+      if (hit) autoPaid = { date: hit.date, amount: Math.abs(Number(hit.amount)) };
+    }
+    const linked = !!(card.plaid_account_id) || list.length > 0;
     // The balance sync falls back to the current balance when Plaid has no last_statement_balance,
     // so statement === total means "unknown", not "statement equals current".
     res.json({
@@ -386,7 +401,8 @@ router.get('/payoff/:card_id', async (req, res) => {
       statement_balance: plaidStatement,
       current_balance: snapCard?.total ?? null,
       balance_as_of: snap?.created_at || null,
-      completed: prior?.paid_at ? prior : null,
+      completed: prior?.paid_at ? prior : autoPaid ? { auto: true, paid_at: `${autoPaid.date}T12:00:00Z`, statement_amount: autoPaid.amount } : null,
+      linked,
     });
   } catch (err) {
     console.error('GET /api/payoff/:card_id', err);

@@ -154,14 +154,17 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   const reviewQueue = data ? data.transactions.filter(t => t.needs_review) : [];
   const tone = !rd || rd.after_payment == null ? 'neutral' : rd.short ? 'danger' : rd.below_cushion ? 'warning' : 'ok';
   const toneColor = { danger: theme.danger, warning: theme.warning, ok: theme.success, neutral: theme.textMuted }[tone];
-  const dueText = rd?.days_until_due == null ? '' : rd.days_until_due === 0 ? 'due today' : rd.days_until_due === 1 ? 'due tomorrow' : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : `due in ${rd.days_until_due} days`;
+  const paid = !!data?.completed;
+  const dueText = rd?.days_until_due == null ? '' : paid ? 'paid' : rd.days_until_due === 0 ? 'due today' : rd.days_until_due === 1 ? 'due tomorrow' : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : `${rd.days_until_due} days`;
+  const toneFinal = paid ? theme.success : toneColor;
 
   return (
     <>
       {/* Card chips */}
-      <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', padding: '0.5rem 0' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', padding: '0.5rem 0', scrollbarWidth: 'none' }}>
         {cards.map(c => (
-          <button key={c.card_id} onClick={() => { setCardId(c.card_id); setRange(null); setEditingStatement(false); }}
+          <button key={c.card_id} ref={el => { if (el && c.card_id === cardId) el.scrollIntoView({ inline: 'nearest', block: 'nearest' }); }}
+            onClick={() => { setCardId(c.card_id); setRange(null); setEditingStatement(false); }}
             style={{ ...s.chip, ...(c.card_id === cardId ? { background: cardColor(theme, c), borderColor: cardColor(theme, c), color: theme.onAccent } : { borderColor: cardColor(theme, c) }) }}>
             <span style={{ width: 10, height: 10, borderRadius: 2, background: c.card_id === cardId ? theme.onAccent : cardColor(theme, c), display: 'inline-block', marginRight: 8, opacity: 0.9 }} />
             {c.label || c.card_id}<span style={{ fontSize: '0.7rem', opacity: 0.8, marginLeft: 6 }}>due {ordinal(c.due_day)}</span>
@@ -189,23 +192,28 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
       {data && (
         <>
           {/* ── 1. Readiness: the one thing that matters ── */}
-          <div style={{ ...s.card, borderColor: toneColor, borderWidth: 2 }} className="fade">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 22, height: 15, borderRadius: 3, background: cardColor(theme, card), display: 'inline-block' }} />{card?.label}</div>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: toneColor }}>{dueText && `${fmtDateLong(data.period.due)} · ${dueText}`}</div>
+          <div style={{ ...s.card, borderColor: toneFinal, borderWidth: 2 }} className="fade">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 22, height: 15, borderRadius: 3, background: cardColor(theme, card), display: 'inline-block', flex: '0 0 auto' }} />{card?.label}</div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: toneFinal, whiteSpace: 'nowrap' }}>{data.period.due ? `${fmtDate(data.period.due)} · ${dueText}` : ''}</div>
             </div>
 
-            {rd?.after_payment == null ? (
+            {paid ? (
+              <>
+                <div style={{ fontSize: '2rem', fontWeight: 800, color: theme.success, marginTop: '0.4rem' }}>Paid ✓</div>
+                <div style={{ fontSize: '0.9rem', color: theme.textMuted }}>{fmt(data.completed.statement_amount)} on {fmtDateLong(String(data.completed.paid_at).slice(0, 10))}{data.completed.auto ? ' (payment seen on the card)' : ''}. Nothing left to do for this statement.</div>
+              </>
+            ) : rd?.after_payment == null ? (
               <div style={{ ...s.note, marginTop: '0.6rem' }}>No balance for {payingLabel} yet. Tap Refresh to pull balances from Plaid.</div>
             ) : (
               <>
-                <div style={{ fontSize: '1.9rem', fontWeight: 800, color: toneColor, marginTop: '0.4rem', fontVariantNumeric: 'tabular-nums' }}>
-                  {rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? `${fmt(rd.after_payment)} left, under cushion` : `Covered, ${fmt(rd.after_payment)} left`}
+                <div style={{ fontSize: '2rem', fontWeight: 800, color: toneColor, marginTop: '0.4rem', lineHeight: 1.1 }}>
+                  {rd.short ? 'Short' : rd.below_cushion ? 'Tight' : 'Covered'}
                 </div>
-                <div style={{ fontSize: '0.85rem', color: theme.textMuted }}>
+                <div style={{ fontSize: '0.95rem', color: theme.text, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>
                   {rd.short
-                    ? `${payingLabel} needs ${fmt(-rd.after_payment)} more before you can pay this card${rd.cushion ? `, ${fmt(rd.shortfall)} to keep the ${fmt(rd.cushion)} cushion` : ''}.`
-                    : rd.below_cushion ? `Payable, but ${payingLabel} drops below the ${fmt(rd.cushion)} cushion.` : `${payingLabel} can pay this and keep the cushion.`}
+                    ? <>{payingLabel} needs <b>{fmt(-rd.after_payment)}</b> more to pay this card{rd.cushion ? `, ${fmt(rd.shortfall)} to keep the cushion` : ''}.</>
+                    : rd.below_cushion ? <><b>{fmt(rd.after_payment)}</b> left after paying, under your {fmt(rd.cushion)} cushion.</> : <><b>{fmt(rd.after_payment)}</b> left in {payingLabel} after paying.</>}
                 </div>
                 <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 4, fontSize: '0.9rem', fontVariantNumeric: 'tabular-nums' }}>
                   <span style={{ color: theme.textMuted }}>{payingLabel} today</span><span>{fmt(rd.paying_balance)}</span>
@@ -249,7 +257,7 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
             </div>
             {Math.abs(st.difference) > 0.5 && (
               <div style={{ fontSize: '0.75rem', color: theme.textMuted, marginTop: 6 }}>
-                Charges in this window total {fmt(data.transactions_total)}; the {fmt(Math.abs(st.difference))} {st.difference > 0 ? 'extra' : 'less'} on the statement is counted against {payingLabel} (usually a credit or charge Amex posted to a neighboring statement).
+                Statement is {fmt(Math.abs(st.difference))} {st.difference > 0 ? 'more' : 'less'} than the charges listed here (carryover or a neighboring cycle). Counted toward {payingLabel}.
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: '0.75rem' }}>

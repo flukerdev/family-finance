@@ -159,7 +159,9 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   }, []);
 
   const refreshAll = useCallback(async (force = false) => {
-    await sync(force);
+    const c0 = await loadCards();
+    await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c0), loadOwed()]);   // paint what we have
+    await sync(force);                                                                 // then talk to Plaid
     const c = await loadCards();
     await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c), loadOwed()]);
   }, [sync, loadCards, loadItems, loadSnapshot, loadSummaries, loadOwed]);
@@ -187,14 +189,14 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
         {view === 'settings' && <Settings {...props} />}
       </div>
       {toast && <div style={s.toast}>{toast}</div>}
-      <nav style={s.nav}>
+      <nav style={s.nav}><div style={{ maxWidth: 560, margin: '0 auto', display: 'flex', justifyContent: 'space-around' }}>
         {[['home', 'Home', 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'], ['close', 'Close', 'M20 6L9 17l-5-5'], ['activity', 'Activity', 'M4 6h16M4 12h16M4 18h16'], ['settings', 'Settings', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z']].map(([k, label, d]) => (
           <button key={k} onClick={() => { setView(k); if (k !== 'close') setCloseCard(null); }} style={{ ...s.navBtn, color: view === k ? theme.accent : theme.textDimmed }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
             <span>{label}</span>
           </button>
         ))}
-      </nav>
+      </div></nav>
     </div>
   );
 }
@@ -219,22 +221,22 @@ function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced,
       {!loaded && cards.length === 0 && [0, 1].map(i => <div key={i} style={{ ...s.card, height: 62 }} className="shimmer" />)}
       {loaded && cards.length === 0 && <div style={s.card}><div style={{ color: theme.textMuted }}>No cards yet. Add one in Settings.</div></div>}
       {byDue.map(c => {
-        const sm = summaries[c.card_id]; const rd = sm?.readiness; const paid = !!sm?.completed;
-        const tone = paid ? theme.success : !rd || rd.after_payment == null ? theme.textMuted : rd.short ? theme.danger : rd.below_cushion ? theme.warning : theme.success;
-        const status = paid ? 'Paid' : !rd || rd.after_payment == null ? 'Needs a refresh' : rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? 'Covered, under cushion' : 'Covered';
+        const sm = summaries[c.card_id]; const rd = sm?.readiness; const paid = !!sm?.completed; const unlinked = sm && sm.linked === false;
+        const tone = unlinked ? theme.textDimmed : paid ? theme.success : !rd || rd.after_payment == null ? theme.textMuted : rd.short ? theme.danger : rd.below_cushion ? theme.warning : theme.success;
+        const status = unlinked ? 'Not connected' : !sm ? '…' : paid ? 'Paid' : rd?.after_payment == null ? 'Needs a refresh' : rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? 'Under cushion' : 'Covered';
         const due = sm?.period?.due;
-        const dueText = rd?.days_until_due == null ? '' : paid ? `next ${fmtDate(due)}` : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : rd.days_until_due === 0 ? 'due today' : `due ${fmtDate(due)} · ${rd.days_until_due}d`;
+        const dueText = unlinked ? 'Link it in Settings' : rd?.days_until_due == null ? '' : paid ? `paid · next statement due ${fmtDate(due)}` : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : rd.days_until_due === 0 ? 'due today' : `due ${fmtDate(due)} · ${rd.days_until_due}d`;
         const cc = cardColor(theme, c);
         return (
           <button key={c.card_id} onClick={() => { setCloseCard(c.card_id); setView('close'); }} style={{ ...s.card, ...s.rowBtn, borderLeft: `4px solid ${cc}` }}>
             <div style={{ width: 34, height: 24, borderRadius: 5, background: cc, marginRight: 12, flex: '0 0 auto', opacity: 0.95 }} />
             <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>{c.label}</div>
-              <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{dueText}{sm?.needs_review_count ? ` · ${sm.needs_review_count} to review` : ''}</div>
+              <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{dueText}{!paid && !unlinked && sm?.needs_review_count ? ` · ${sm.needs_review_count} to review` : ''}</div>
             </div>
             <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
               <div style={{ fontWeight: 700, color: tone }}>{status}</div>
-              <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{sm ? fmt(sm.statement?.amount) : ''}</div>
+              <div style={{ fontSize: '0.8rem', color: theme.textMuted }}>{sm && !unlinked ? fmt(sm.statement?.amount) : ''}</div>
             </div>
             <span style={{ color: theme.textDimmed, marginLeft: 8 }}>›</span>
           </button>
@@ -464,7 +466,7 @@ const makeStyles = (theme) => ({
   secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 12, padding: '0.7rem 0.9rem', fontWeight: 500, fontSize: '0.95rem', cursor: 'pointer', fontFamily: 'inherit', minHeight: 44 },
   linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.9rem', padding: '0.5rem 0.25rem', fontFamily: 'inherit', minHeight: 36 },
   note: { background: theme.accentBg, color: theme.textMuted, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.8rem' },
-  nav: { position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-around', padding: '0.4rem 0 calc(0.9rem + env(safe-area-inset-bottom))', background: theme.bg, borderTop: `1px solid ${theme.border}`, zIndex: 50 },
+  nav: { position: 'fixed', bottom: 0, left: 0, right: 0, padding: '0.4rem 0 calc(0.9rem + env(safe-area-inset-bottom))', background: theme.bg, borderTop: `1px solid ${theme.border}`, zIndex: 50 },
   navBtn: { background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 72, minHeight: 48, borderRadius: 10 },
   toast: { position: 'fixed', bottom: 'calc(5rem + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', background: theme.text, color: theme.bg, padding: '0.5rem 0.9rem', borderRadius: 999, fontSize: '0.85rem', zIndex: 100 },
 });
