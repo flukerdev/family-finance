@@ -11,7 +11,7 @@ const shiftMonth = (ymd, n) => { const d = new Date(`${ymd}T00:00:00`); d.setMon
 const addDays = (ymd, n) => { const d = new Date(`${ymd}T00:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const titleCase = s => (s || 'Other').toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-export default function CloseView({ theme, authFetch, apiUrl, creditCards, config, onRefresh }) {
+export default function CloseView({ theme, authFetch, apiUrl, creditCards, config, onRefresh, initialCardId = null }) {
   const [tab, setTab] = useState('payoff');
   const bucketMeta = useMemo(() => ({
     live: { label: 'Live', color: theme.live },
@@ -38,7 +38,7 @@ export default function CloseView({ theme, authFetch, apiUrl, creditCards, confi
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 1rem 6rem' }}>
         {tab === 'payoff'
-          ? <Payoff theme={theme} s={s} authFetch={authFetch} apiUrl={apiUrl} creditCards={creditCards} bucketMeta={bucketMeta} onRefresh={onRefresh} />
+          ? <Payoff theme={theme} s={s} authFetch={authFetch} apiUrl={apiUrl} creditCards={creditCards} bucketMeta={bucketMeta} onRefresh={onRefresh} initialCardId={initialCardId} />
           : <Pnl theme={theme} s={s} authFetch={authFetch} apiUrl={apiUrl} bucketMeta={bucketMeta} />}
       </div>
     </main>
@@ -46,9 +46,9 @@ export default function CloseView({ theme, authFetch, apiUrl, creditCards, confi
 }
 
 // ─── Payoff ──────────────────────────────────────────────────────────────────
-function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefresh }) {
+function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefresh, initialCardId }) {
   const cards = creditCards || [];
-  const [cardId, setCardId] = useState(() => pickDefaultCard(cards));
+  const [cardId, setCardId] = useState(() => initialCardId || pickDefaultCard(cards));
   const [range, setRange] = useState(null);           // null = server-computed current statement
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);

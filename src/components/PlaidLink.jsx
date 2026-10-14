@@ -38,7 +38,7 @@ const PlaidLinkButton = ({ linkToken, onSuccess, authFetch }) => {
       disabled={!ready}
       style={{
         padding: '0.75rem 1.5rem',
-        backgroundColor: ready ? '#10b981' : '#334155',
+        backgroundColor: ready ? '#5FB58A' : '#2A3038',
         border: 'none',
         borderRadius: '0.5rem',
         color: '#fff',
@@ -93,7 +93,7 @@ const PlaidLink = ({ onSuccess, authFetch }) => {
 
   if (error) {
     return (
-      <div style={{ color: '#ef4444', padding: '1rem', backgroundColor: '#1e1e1e', borderRadius: '0.5rem' }}>
+      <div style={{ color: '#E07A7A', padding: '1rem', backgroundColor: '#0F1115', borderRadius: '0.5rem' }}>
         <strong>Error:</strong> {error}
         <br />
         <small>Check that the server is running and Plaid credentials are correct.</small>
@@ -107,7 +107,7 @@ const PlaidLink = ({ onSuccess, authFetch }) => {
         disabled
         style={{
           padding: '0.75rem 1.5rem',
-          backgroundColor: '#334155',
+          backgroundColor: '#2A3038',
           border: 'none',
           borderRadius: '0.5rem',
           color: '#fff',

@@ -19,7 +19,8 @@ const PAID_FROM_OPTIONS = [
   { value: 'person2', label: 'Person 2 Personal' },
 ];
 
-const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, person2Name }) => {
+const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, person2Name, theme }) => {
+  const styles = makeStyles(theme);
   const [accounts, setAccounts] = useState([]);
   // mappings: { [plaid_account_id]: { mode, bucket, cardId, cardLabel, paidFromBucket, dueDay } }
   const [mappings, setMappings] = useState({});
@@ -230,7 +231,7 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
       <div style={styles.container}>
         <div style={styles.emptyState}>
           <p>No accounts connected yet.</p>
-          <p style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+          <p style={{ fontSize: '0.875rem', color: theme.textMuted }}>
             Connect your accounts using the button above, then return here to configure mappings.
           </p>
         </div>
@@ -250,7 +251,7 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
       {message && (
         <div style={{
           ...styles.message,
-          backgroundColor: message.includes('Saved') ? '#064e3b' : '#7f1d1d'
+          backgroundColor: message.includes('Saved') ? theme.successBg : theme.dangerBg
         }}>
           {message}
         </div>
@@ -279,7 +280,7 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
                     <div style={styles.accountDetails}>
                       <span style={{
                         ...styles.accountType,
-                        backgroundColor: isCredit ? '#7f1d1d' : '#064e3b'
+                        backgroundColor: isCredit ? theme.dangerBg : theme.successBg
                       }}>
                         {isCredit ? 'Credit Card' : account.subtype || 'Checking'}
                       </span>
@@ -350,7 +351,7 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
                         onChange={(e) => handleCheckingBucketChange(account.account_id, e.target.value)}
                         style={{
                           ...styles.select,
-                          borderColor: m ? '#10b981' : '#334155'
+                          borderColor: m ? theme.success : theme.border
                         }}
                       >
                         {checkingBuckets.map(bucket => (
@@ -387,9 +388,9 @@ const AccountMappingUI = ({ onMappingSaved, authFetch, isSyncing, person1Name, p
   );
 };
 
-const styles = {
+const makeStyles = (theme) => ({
   container: {
-    backgroundColor: '#1e293b',
+    backgroundColor: theme.cardBgElevated,
     borderRadius: '0.75rem',
     padding: '1.25rem',
     marginTop: '1rem',
@@ -400,23 +401,23 @@ const styles = {
   title: {
     fontSize: '1rem',
     fontWeight: '600',
-    color: '#f1f5f9',
+    color: theme.text,
     margin: 0,
   },
   subtitle: {
     fontSize: '0.75rem',
-    color: '#94a3b8',
+    color: theme.textMuted,
     margin: '0.25rem 0 0 0',
     lineHeight: '1.4',
   },
   loading: {
     textAlign: 'center',
-    color: '#94a3b8',
+    color: theme.textMuted,
     padding: '2rem',
   },
   emptyState: {
     textAlign: 'center',
-    color: '#cbd5e1',
+    color: theme.textMuted,
     padding: '1.5rem',
   },
   message: {
@@ -433,7 +434,7 @@ const styles = {
     gap: '1rem',
   },
   institutionGroup: {
-    backgroundColor: '#0f172a',
+    backgroundColor: theme.cardBg,
     borderRadius: '0.5rem',
     overflow: 'hidden',
   },
@@ -442,17 +443,17 @@ const styles = {
     alignItems: 'center',
     gap: '0.5rem',
     padding: '0.75rem 1rem',
-    backgroundColor: '#1e293b',
-    borderBottom: '1px solid #334155',
+    backgroundColor: theme.cardBgElevated,
+    borderBottom: `1px solid ${theme.border}`,
   },
   institutionName: {
     fontSize: '0.875rem',
     fontWeight: '600',
-    color: '#e2e8f0',
+    color: theme.text,
   },
   accountRow: {
     padding: '0.75rem 1rem',
-    borderBottom: '1px solid #1e293b',
+    borderBottom: `1px solid ${theme.cardBgElevated}`,
   },
   accountInfo: {
     marginBottom: '0.5rem',
@@ -460,11 +461,11 @@ const styles = {
   accountName: {
     fontSize: '0.875rem',
     fontWeight: '500',
-    color: '#f1f5f9',
+    color: theme.text,
   },
   accountMask: {
     fontSize: '0.75rem',
-    color: '#64748b',
+    color: theme.textDimmed,
   },
   accountDetails: {
     display: 'flex',
@@ -482,7 +483,7 @@ const styles = {
   },
   accountBalance: {
     fontSize: '0.75rem',
-    color: '#94a3b8',
+    color: theme.textMuted,
   },
   mappingControls: {
     marginTop: '0.5rem',
@@ -490,19 +491,19 @@ const styles = {
   select: {
     width: '100%',
     padding: '0.5rem 0.75rem',
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
+    backgroundColor: theme.cardBg,
+    border: `1px solid ${theme.border}`,
     borderRadius: '0.375rem',
-    color: '#f1f5f9',
+    color: theme.text,
     fontSize: '0.875rem',
     cursor: 'pointer',
   },
   addCardButton: {
     padding: '0.375rem 0.75rem',
-    backgroundColor: '#1e293b',
-    border: '1px dashed #475569',
+    backgroundColor: theme.cardBgElevated,
+    border: `1px dashed ${theme.border}`,
     borderRadius: '0.375rem',
-    color: '#94a3b8',
+    color: theme.textMuted,
     fontSize: '0.8125rem',
     cursor: 'pointer',
   },
@@ -511,9 +512,9 @@ const styles = {
     flexDirection: 'column',
     gap: '0.5rem',
     padding: '0.5rem',
-    backgroundColor: '#1e293b',
+    backgroundColor: theme.cardBgElevated,
     borderRadius: '0.375rem',
-    border: '1px solid #10b981',
+    border: `1px solid ${theme.success}`,
   },
   cardConfigRow: {
     display: 'flex',
@@ -522,26 +523,26 @@ const styles = {
   },
   cardConfigLabel: {
     fontSize: '0.75rem',
-    color: '#94a3b8',
+    color: theme.textMuted,
     minWidth: '70px',
     flexShrink: 0,
   },
   cardInput: {
     flex: 1,
     padding: '0.375rem 0.5rem',
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
+    backgroundColor: theme.cardBg,
+    border: `1px solid ${theme.border}`,
     borderRadius: '0.25rem',
-    color: '#f1f5f9',
+    color: theme.text,
     fontSize: '0.8125rem',
   },
   cardSelect: {
     flex: 1,
     padding: '0.375rem 0.5rem',
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
+    backgroundColor: theme.cardBg,
+    border: `1px solid ${theme.border}`,
     borderRadius: '0.25rem',
-    color: '#f1f5f9',
+    color: theme.text,
     fontSize: '0.8125rem',
     cursor: 'pointer',
   },
@@ -549,9 +550,9 @@ const styles = {
     alignSelf: 'flex-end',
     padding: '0.25rem 0.5rem',
     backgroundColor: 'transparent',
-    border: '1px solid #7f1d1d',
+    border: `1px solid ${theme.dangerBg}`,
     borderRadius: '0.25rem',
-    color: '#ef4444',
+    color: theme.danger,
     fontSize: '0.75rem',
     cursor: 'pointer',
   },
@@ -561,15 +562,15 @@ const styles = {
     alignItems: 'center',
     marginTop: '1rem',
     paddingTop: '1rem',
-    borderTop: '1px solid #334155',
+    borderTop: `1px solid ${theme.border}`,
   },
   summaryText: {
     fontSize: '0.875rem',
-    color: '#94a3b8',
+    color: theme.textMuted,
   },
   saveButton: {
     padding: '0.625rem 1.25rem',
-    backgroundColor: '#10b981',
+    backgroundColor: theme.success,
     border: 'none',
     borderRadius: '0.5rem',
     color: '#fff',
@@ -578,6 +579,6 @@ const styles = {
     cursor: 'pointer',
     transition: 'opacity 0.2s',
   },
-};
+});
 
 export default AccountMappingUI;
