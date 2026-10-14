@@ -304,9 +304,11 @@ router.get('/pnl', async (req, res) => {
       spending.push({ ...t, primary, detailed, bucket });
     }
 
-    const sumBy = (arr, key) => {
+    // Income rows are negative in Plaid's convention; report them as positive magnitudes.
+    // Spending rows keep their sign so refunds net against purchases.
+    const sumBy = (arr, key, { magnitude = false } = {}) => {
       const out = {};
-      for (const t of arr) { const k = t[key] || 'OTHER'; out[k] = num((out[k] || 0) + Math.abs(Number(t.amount)) * (Number(t.amount) < 0 ? -1 : 1)); }
+      for (const t of arr) { const k = t[key] || 'OTHER'; const v = magnitude ? Math.abs(Number(t.amount)) : Number(t.amount); out[k] = num((out[k] || 0) + v); }
       return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]));
     };
     const incomeTotal = num(income.reduce((s, t) => s + Math.abs(Number(t.amount)), 0));
@@ -321,7 +323,7 @@ router.get('/pnl', async (req, res) => {
 
     res.json({
       month, start, end,
-      income: { total: incomeTotal, by_bucket: sumBy(income, 'bucket'), by_category: sumBy(income, 'primary'), items: income },
+      income: { total: incomeTotal, by_bucket: sumBy(income, 'bucket', { magnitude: true }), by_category: sumBy(income, 'primary', { magnitude: true }), items: income },
       spending: { total: spendTotal, by_bucket: sumBy(spending, 'bucket'), by_category: sumBy(spending, 'primary'), items: spending },
       net: num(incomeTotal - spendTotal),
       live: { planned: livePlan, planned_total: livePlanTotal, actual: liveActual, variance: num(livePlanTotal - liveActual) },
