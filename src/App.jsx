@@ -225,7 +225,7 @@ function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced,
         const tone = unlinked ? theme.textDimmed : paid ? theme.success : !rd || rd.after_payment == null ? theme.textMuted : rd.short ? theme.danger : rd.below_cushion ? theme.warning : theme.success;
         const status = unlinked ? 'Not connected' : !sm ? '…' : paid ? 'Paid' : rd?.after_payment == null ? 'Needs a refresh' : rd.short ? `Short ${fmt(-rd.after_payment)}` : rd.below_cushion ? 'Under cushion' : 'Covered';
         const due = sm?.period?.due;
-        const dueText = unlinked ? 'Link it in Settings' : rd?.days_until_due == null ? '' : paid ? `paid · next statement due ${fmtDate(due)}` : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : rd.days_until_due === 0 ? 'due today' : `due ${fmtDate(due)} · ${rd.days_until_due}d`;
+        const dueText = unlinked ? 'Link it in Settings' : rd?.days_until_due == null ? '' : paid ? `paid · was due ${fmtDate(due)}` : rd.days_until_due < 0 ? `${-rd.days_until_due}d overdue` : rd.days_until_due === 0 ? 'due today' : `due ${fmtDate(due)} · ${rd.days_until_due}d`;
         const cc = cardColor(theme, c);
         return (
           <button key={c.card_id} onClick={() => { setCloseCard(c.card_id); setView('close'); }} style={{ ...s.card, ...s.rowBtn, borderLeft: `4px solid ${cc}` }}>
