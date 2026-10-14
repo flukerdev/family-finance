@@ -62,8 +62,27 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   const [showCharges, setShowCharges] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [rules, setRules] = useState([]);
+  const [owed, setOwed] = useState(null);             // pending reimbursements to Save
 
   useEffect(() => { if (!cardId && cards.length) setCardId(pickDefaultCard(cards)); }, [cards.length]);
+
+  const loadOwed = async () => {
+    try { const r = await authFetch(`${apiUrl}/api/payoff/reimbursements`); const j = await r.json(); setOwed(j); } catch {}
+  };
+  useEffect(() => { loadOwed(); }, []);
+
+  const setRoute = async (front) => {
+    if (!data) return;
+    await authFetch(`${apiUrl}/api/payoff/route`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due, front }),
+    });
+    await load();
+  };
+  const markReimbursed = async (item) => {
+    await authFetch(`${apiUrl}/api/payoff/reimbursements/done`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payoff_id: item.payoff_id, index: item.index }) });
+    await loadOwed();
+  };
 
   const load = async () => {
     if (!cardId) return;
@@ -113,9 +132,9 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
     await authFetch(`${apiUrl}/api/payoff/complete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due,
-        statement_amount: data.statement.amount, allocations: data.totals, transfers: data.transfers }),
+        statement_amount: data.statement.amount, allocations: data.totals, transfers: [...data.transfers, ...(data.routing?.reimbursements || [])] }),
     });
-    await load();
+    await load(); await loadOwed();
   };
 
   const stepPeriod = (dir) => {
@@ -150,6 +169,20 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
 
       {error && <div style={{ ...s.card, borderColor: theme.danger, color: theme.dangerLight }}>{error}</div>}
       {loading && !data && <p style={{ color: theme.textMuted, textAlign: 'center', padding: '2rem' }}>Loading…</p>}
+
+      {owed && owed.reimbursements.some(i => i.status === 'pending') && (
+        <div style={{ ...s.card, borderColor: theme.warning }}>
+          <div style={s.sectionTitle}>Save is owed {fmt(owed.pending_total)}</div>
+          {owed.reimbursements.filter(i => i.status === 'pending').map(i => (
+            <div key={`${i.payoff_id}-${i.index}`} style={s.transferRow}>
+              <Dot color={bucketMeta[i.from]?.color} />
+              <span style={{ flex: 1, fontSize: '0.9rem' }}>{bucketMeta[i.from]?.label || i.from} → {bucketMeta[i.to]?.label || i.to} <span style={{ color: theme.textDimmed, fontSize: '0.75rem' }}>· fronted {fmtDate(i.paid_at?.slice(0, 10))} for {i.card_id}</span></span>
+              <strong style={{ marginRight: 8 }}>{fmt(i.amount)}</strong>
+              <button onClick={() => markReimbursed(i)} style={s.linkBtn}>moved</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {data && (
         <>
@@ -246,10 +279,23 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
               : data.transfers.map((t, i) => (
                 <div key={i} style={s.transferRow}>
                   <Dot color={bucketMeta[t.from]?.color} />
-                  <span style={{ flex: 1 }}>{bucketMeta[t.from]?.label || t.from} → {bucketMeta[t.to]?.label || t.to}</span>
+                  <span style={{ flex: 1 }}>{bucketMeta[t.from]?.label || t.from} → {bucketMeta[t.to]?.label || t.to}
+                    {t.kind === 'front' && <span style={{ color: theme.textDimmed, fontSize: '0.75rem' }}> · fronting {bucketMeta[t.fronted_for]?.label}</span>}
+                    {data.routing?.slow_sources?.includes(t.from) && <span style={{ color: theme.warning, fontSize: '0.75rem' }}> · takes days to clear</span>}
+                  </span>
                   <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(t.amount)}</strong>
                 </div>
               ))}
+            {data.routing?.can_front && !data.completed && (
+              <button onClick={() => setRoute(!data.routing.front_from)} style={{ ...s.secondaryBtn, width: '100%', marginTop: '0.5rem', borderColor: theme.warning, fontSize: '0.85rem' }}>
+                {data.routing.front_from ? 'Undo: pay from Marriage Starter directly' : 'Need the cash now: front it from Save'}
+              </button>
+            )}
+            {data.routing?.reimbursements?.length > 0 && (
+              <div style={{ ...s.note, marginTop: '0.5rem' }}>
+                Then, once it clears: {data.routing.reimbursements.map((r, i) => <span key={i}>{bucketMeta[r.from]?.label} → {bucketMeta[r.to]?.label} {fmt(r.amount)}{i < data.routing.reimbursements.length - 1 ? '; ' : ''}</span>)}. Tracked under "Save is owed" until you mark it moved.
+              </div>
+            )}
             <div style={{ ...s.transferRow, borderTop: `1px solid ${theme.border}`, marginTop: '0.5rem', paddingTop: '0.5rem' }}>
               <span style={{ flex: 1 }}>Then pay the card from {payingLabel}</span>
               <strong style={{ fontSize: '1.1rem', fontVariantNumeric: 'tabular-nums' }}>{fmt(st.amount)}</strong>
@@ -371,6 +417,48 @@ function BucketPicker({ txn, bucketMeta, theme, s, onClose, onPick }) {
 }
 
 // ─── P&L ─────────────────────────────────────────────────────────────────────
+function MerchantLookup({ theme, s, authFetch, apiUrl }) {
+  const [q, setQ] = useState('');
+  const [res, setRes] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (q.trim().length < 2) return;
+    setBusy(true);
+    try { const r = await authFetch(`${apiUrl}/api/merchant?q=${encodeURIComponent(q.trim())}`); setRes(await r.json()); } finally { setBusy(false); }
+  };
+  return (
+    <div style={s.card}>
+      <div style={s.sectionTitle}>Where am I at with…</div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} placeholder="a merchant, e.g. Bonobos"
+          style={{ flex: 1, minWidth: 0, background: theme.cardBgElevated, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '1rem' }} />
+        <button onClick={run} disabled={busy} style={{ ...s.secondaryBtn }}>{busy ? '…' : 'Look up'}</button>
+      </div>
+      {res && !res.error && (
+        <div style={{ marginTop: '0.75rem' }}>
+          {res.count === 0 ? <p style={{ color: theme.textMuted }}>Nothing matching "{res.query}" since {''}your history starts.</p> : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+                <Stat label="Bought" value={fmt(res.purchases)} theme={theme} boxed />
+                <Stat label="Refunded" value={fmt(-res.refunds)} theme={theme} color={theme.success} boxed />
+                <Stat label="Net" value={fmt(res.net)} theme={theme} color={res.net > 0 ? theme.danger : theme.success} boxed />
+              </div>
+              <div style={{ fontSize: '0.75rem', color: theme.textDimmed, margin: '0.4rem 0' }}>{res.count} transactions, {fmtDate(res.first)} to {fmtDate(res.last)}</div>
+              {res.items.slice(0, 12).map(t => (
+                <div key={t.plaid_transaction_id} style={{ ...s.txnRow, padding: '0.4rem 0.25rem' }}>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: '0.85rem' }}><span style={{ color: theme.textDimmed }}>{fmtDate(t.date)}</span> {t.name}</div>
+                  <div style={{ fontWeight: 600, color: t.amount < 0 ? theme.success : theme.text, fontVariantNumeric: 'tabular-nums' }}>{t.amount < 0 ? '+' : ''}{fmt(Math.abs(t.amount))}</div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      {res?.error && <div style={{ color: theme.dangerLight, marginTop: 8 }}>{res.error}</div>}
+    </div>
+  );
+}
+
 function Pnl({ theme, s, authFetch, apiUrl, bucketMeta }) {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [data, setData] = useState(null);
@@ -397,6 +485,7 @@ function Pnl({ theme, s, authFetch, apiUrl, bucketMeta }) {
 
   return (
     <>
+      <MerchantLookup theme={theme} s={s} authFetch={authFetch} apiUrl={apiUrl} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0' }}>
         <button onClick={() => step(-1)} style={s.iconBtn}>‹</button>
         <div style={{ fontWeight: 600 }}>{label}</div>

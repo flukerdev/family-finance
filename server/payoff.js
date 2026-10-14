@@ -17,6 +17,23 @@ import { Router } from 'express';
 const router = Router();
 
 export const BUCKETS = ['give', 'save', 'live', 'person1', 'person2', 'marriage_starter'];
+// Buckets that take days to move money out of (brokerage cash). A transfer from one of these can
+// be "fronted": Save pays the paying account today, and the slow bucket reimburses Save later.
+export const SLOW_SOURCES = ['marriage_starter'];
+export const FRONT_FROM = 'save';
+
+// Turn the plain transfer list into the routed plan: fronted transfers become two legs.
+export function routeTransfers(transfers, frontFrom) {
+  if (!frontFrom) return { plan: transfers.map(t => ({ ...t, kind: 'transfer' })), reimbursements: [] };
+  const plan = [], reimbursements = [];
+  for (const t of transfers) {
+    if (SLOW_SOURCES.includes(t.from) && t.from !== frontFrom) {
+      plan.push({ from: frontFrom, to: t.to, amount: t.amount, kind: 'front', fronted_for: t.from });
+      reimbursements.push({ from: t.from, to: frontFrom, amount: t.amount, kind: 'reimbursement', status: 'pending' });
+    } else plan.push({ ...t, kind: 'transfer' });
+  }
+  return { plan, reimbursements };
+}
 
 // Plaid detailed categories that are internal money movement, not income or spending.
 const INTERNAL_DETAILED = new Set([
@@ -231,6 +248,55 @@ router.post('/payoff/statement', async (req, res) => {
   res.json({ payoff: data });
 });
 
+// "Need the cash now": front slow-bucket transfers from Save for this cycle (or turn it off).
+router.post('/payoff/route', async (req, res) => {
+  const { card_id, period_start, period_end, due_date = null, front = true } = req.body || {};
+  if (!card_id || !period_start || !period_end) return res.status(400).json({ error: 'card_id, period_start, period_end required' });
+  const { data: existing } = await req.supabase.from('payoffs').select('*').eq('card_id', card_id).eq('period_end', period_end).maybeSingle();
+  if (existing?.paid_at) return res.status(400).json({ error: 'This payoff is already marked paid' });
+  const row = { user_id: req.userId, card_id, period_start, period_end, due_date, paid_at: null,
+    statement_amount: existing?.statement_amount ?? null, transfers: { front_from: front ? FRONT_FROM : null } };
+  const { data, error } = await req.supabase.from('payoffs').upsert(row, { onConflict: 'user_id,card_id,period_end' }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ payoff: data });
+});
+
+// Reimbursements still owed to Save by slow buckets (from completed payoffs), and marking them done.
+router.get('/payoff/reimbursements', async (req, res) => {
+  const { data, error } = await req.supabase.from('payoffs').select('id, card_id, period_end, paid_at, transfers').not('paid_at', 'is', null).order('paid_at', { ascending: false }).limit(60);
+  if (error) return res.status(500).json({ error: error.message });
+  const items = [];
+  for (const p of data || []) {
+    const list = Array.isArray(p.transfers) ? p.transfers : [];
+    list.forEach((t, i) => { if (t.kind === 'reimbursement') items.push({ payoff_id: p.id, index: i, card_id: p.card_id, period_end: p.period_end, paid_at: p.paid_at, ...t }); });
+  }
+  res.json({ reimbursements: items, pending_total: num(items.filter(i => i.status === 'pending').reduce((s, i) => s + i.amount, 0)) });
+});
+
+router.post('/payoff/reimbursements/done', async (req, res) => {
+  const { payoff_id, index } = req.body || {};
+  const { data: p } = await req.supabase.from('payoffs').select('transfers').eq('id', payoff_id).maybeSingle();
+  if (!p || !Array.isArray(p.transfers) || !p.transfers[index]) return res.status(404).json({ error: 'reimbursement not found' });
+  const transfers = p.transfers.map((t, i) => i === index ? { ...t, status: 'done', done_at: new Date().toISOString() } : t);
+  const { error } = await req.supabase.from('payoffs').update({ transfers }).eq('id', payoff_id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+// Merchant lookup: "where am I at with Bonobos?"
+router.get('/merchant', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.status(400).json({ error: 'q must be at least 2 characters' });
+  const like = `*${q.replace(/[%*,()]/g, '')}*`;
+  const { data, error } = await req.supabase.from('transactions').select('plaid_transaction_id, date, amount, name, merchant_name, app_account_type, pending')
+    .or(`merchant_name.ilike.${like},name.ilike.${like}`).order('date', { ascending: false }).limit(200);
+  if (error) return res.status(500).json({ error: error.message });
+  const rows = (data || []).filter(r => !r.pending);
+  const purchases = num(rows.filter(r => Number(r.amount) > 0).reduce((s, r) => s + Number(r.amount), 0));
+  const refunds = num(rows.filter(r => Number(r.amount) < 0).reduce((s, r) => s + Number(r.amount), 0));
+  res.json({ query: q, count: rows.length, purchases, refunds, net: num(purchases + refunds), first: rows.length ? rows[rows.length - 1].date : null, last: rows[0]?.date || null, items: rows });
+});
+
 router.get('/payoff/history', async (req, res) => {
   const { data, error } = await req.supabase.from('payoffs').select('*').order('period_end', { ascending: false }).limit(36);
   if (error) return res.status(500).json({ error: error.message });
@@ -272,7 +338,11 @@ router.get('/payoff/:card_id', async (req, res) => {
     const list = posted.filter(t => !isPayment(t));
     const { rules, overrides } = await loadRulesAndOverrides(req.supabase, list.map(t => t.plaid_transaction_id));
     const allocated = allocateTransactions(list, { rules, overrides, defaultBucket: payingBucket, cardId });
-    const { totals, transfers, total } = buildTransfers(allocated, payingBucket);
+    const { totals, transfers: rawTransfers, total } = buildTransfers(allocated, payingBucket);
+    const frontFrom = prior && prior.transfers && !Array.isArray(prior.transfers) ? prior.transfers.front_from || null : null;
+    const routed = routeTransfers(rawTransfers, frontFrom);
+    const transfers = routed.plan;
+    const canFront = rawTransfers.some(t => SLOW_SOURCES.includes(t.from));
 
     // Statement amount: what you typed from the statement > Plaid's statement balance > window total.
     // Window totals go by transaction date and can miss credits that Amex posted to a different
@@ -301,6 +371,7 @@ router.get('/payoff/:card_id', async (req, res) => {
         days_until_due: daysUntilDue,
         balances_as_of: snap?.created_at || null,
       },
+      routing: { front_from: frontFrom, can_front: canFront, slow_sources: SLOW_SOURCES, reimbursements: routed.reimbursements },
       needs_review_count: needsReview.length,
       needs_review_ids: needsReview.map(t => t.plaid_transaction_id),
       payments: payments.map(t => ({ date: t.date, amount: Math.abs(Number(t.amount)), name: t.merchant_name || t.name })),
