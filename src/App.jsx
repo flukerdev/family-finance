@@ -8,14 +8,17 @@ import NetPositionChart from './components/NetPositionChart';
 import SafeToSpendChart from './components/SafeToSpendChart';
 import BudgetHealthChart from './components/BudgetHealthChart';
 import Onboarding from './components/Onboarding';
+import CloseView from './components/CloseView';
 
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// API base URL — defaults to localhost for dev, override via VITE_API_URL for production
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// API base URL. In production the Express app is deployed as a Vercel function on the
+// same origin (see api/index.js + vercel.json), so the default is '' (same-origin /api).
+// Local dev talks to `npm run server` on :3001. VITE_API_URL overrides both.
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:3001' : '');
 
 // Test mode detection — activates sandbox Plaid (free), skips OTP, shows reset button.
 // ONLY works on localhost with ?testmode in the URL. Ignored on production (Vercel).
@@ -5636,6 +5639,20 @@ export default function App() {
       )}
 
       {/* Transactions Tab */}
+      {currentView === 'close' && (
+        <CloseView
+          theme={theme}
+          authFetch={authFetch}
+          apiUrl={API_URL}
+          creditCards={getEffectiveCreditCards()}
+          config={config}
+          onRefresh={async () => {
+            await Promise.all([syncTransactions(true, true), syncBalances(true, true)]);
+            await Promise.all([fetchSnapshots(true), fetchCreditCards()]);
+          }}
+        />
+      )}
+
       {currentView === 'transactions' && (
         <main style={styles.main}>
           {/* Header with last synced */}
@@ -6246,6 +6263,19 @@ export default function App() {
             <line x1="2" y1="10" x2="22" y2="10"></line>
           </svg>
           <span>Accounts</span>
+        </button>
+        <button
+          onClick={() => setCurrentView('close')}
+          style={{
+            ...styles.bottomNavButton,
+            color: currentView === 'close' ? theme.accent : theme.textDimmed,
+          }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+            <rect x="2" y="3" width="20" height="18" rx="3"></rect>
+          </svg>
+          <span>Close</span>
         </button>
         <button
           onClick={() => setCurrentView('transactions')}

@@ -7,6 +7,7 @@ import { Configuration, PlaidApi, PlaidEnvironments } from 'plaid';
 import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import payoffRouter from './payoff.js';
 
 // Get the directory of the current file
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +17,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
+app.set('trust proxy', 1); // behind Vercel's proxy
 
 // ─── Security headers ───────────────────────────────────────────────────────
 // helmet() sets a collection of HTTP headers that protect against common attacks:
@@ -33,6 +35,10 @@ app.use(helmet());
 // ALLOWED_ORIGINS env var lets you add extra origins (comma-separated) if needed.
 const allowedOrigins = [
   'https://family-finance-rouge.vercel.app',
+  'https://flipbudget.app',
+  'https://www.flipbudget.app',
+  // Vercel preview + project deployments
+  /^https:\/\/[a-z0-9-]+\.vercel\.app$/,
   // Always allow localhost for development
   /^http:\/\/localhost(:\d+)?$/,
 ];
@@ -177,6 +183,9 @@ const resolveTestMode = (req, res, next) => {
   next();
 };
 app.use('/api', resolveTestMode);
+
+// Payoff + P&L routes (server/payoff.js)
+app.use('/api', payoffRouter);
 
 // Create link token for Plaid Link
 app.post('/api/create_link_token', strictLimiter, async (req, res) => {
@@ -1825,7 +1834,14 @@ app.post('/api/analyze-spending', requireAuth, async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// On Vercel this module is imported by api/index.js and exported as a serverless
+// function, so we only listen when run directly (`npm run server`).
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+if (isDirectRun && !process.env.VERCEL) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+export default app;

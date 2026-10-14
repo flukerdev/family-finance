@@ -6,6 +6,16 @@
 
 ## Current State
 
+**2026-10-13 — Payoff + P&L shipped, backend moved to Vercel.** The Express server now deploys as a
+Vercel function in the same project (`api/index.js`), so flipbudget.app has a live API for the first
+time (before this, production pointed at localhost:3001 and Plaid only worked with the server running
+locally). New `Close` tab: Payoff walks each card statement, lets you re-bucket any charge (with
+"always" rules), and lists the transfers to make before paying; P&L is the household income statement
+by calendar month with Live planned vs actual. Migration: `sql/create-payoff-tables.sql`.
+Decisions: no push notifications (Mat refreshes himself); Blue Cash and Gold due dates moving to the 23rd
+so statements align to calendar months; all three cards reviewed before transfers.
+
+
 All core web features implemented. Plaid production access is LIVE. Email signup and verification working. Now executing the MVP v2 roadmap (see PLAN.md) — building toward an iPhone app via Expo/React Native for friends-and-family launch.
 
 ## Current Roadmap Phase

@@ -74,10 +74,12 @@ This is Mat's personal project. He is learning web development — **always expl
 ```
 
 ## Deployment
-- **Hosting:** Vercel (auto-deploys from GitHub main branch)
-- **Production URL:** https://family-finance-rouge.vercel.app
-- **Public privacy policy:** https://family-finance-rouge.vercel.app/privacy (no login required)
-- **SPA routing:** `vercel.json` rewrites all paths to `index.html` so React handles routing
+- **Hosting:** Vercel, project `flip` under the flukerdev team, auto-deploys from GitHub `flukerdev/family-finance` main
+- **Production URL:** https://flipbudget.app (canonical). `family-finance-rouge.vercel.app` is the legacy hostname from the old matfluker account
+- **Backend:** the Express app in `server/index.js` is ALSO the production API. `api/index.js` imports and exports it, and `vercel.json` rewrites `/api/(.*)` to that function (60s max duration). Frontend and API share one origin, so `API_URL` defaults to `''` in production builds and `http://localhost:3001` in `vite` dev.
+- **Env vars live in the Vercel project** (Settings → Environment Variables), same names as the local `.env` below. Never commit `.env`.
+- **SPA routing:** `vercel.json` rewrites every non-/api path to `index.html`
+- **Supabase migrations are manual:** paste the file from `sql/` into the Supabase SQL editor
 
 ## Environment Variables (.env in project root)
 ```
@@ -145,7 +147,8 @@ The `createStyles(theme, fonts)` function generates all shared style objects fro
 | Accounts view | 4400–4500 | Account list + chart drill-down |
 | Calendar view | 4500–4700 | Monthly calendar with bill markers |
 | Popup system | 4700–5100 | Slide-in panels for safeToSpend, positiveDetail, budgetHealth, etc. |
-| Bottom nav | 5100–5150 | Home → Accounts → Calendar |
+| Bottom nav | end of JSX | Home → Accounts → Close → Activity → Calendar |
+| Close view | `components/CloseView.jsx` | Payoff (per card statement) + P&L (per month) tabs |
 
 ### Key Patterns
 
@@ -393,6 +396,11 @@ Stores individual bank/card transactions from Plaid.
 - `pending` (BOOLEAN) — true while bank is still processing
 - **Unique:** `(user_id, plaid_transaction_id)`
 
+### `allocation_rules` / `transaction_allocations` / `payoffs` (sql/create-payoff-tables.sql)
+- `allocation_rules`: `pattern` (substring, case-insensitive), `bucket`, `card_id` (NULL = all cards). Unique (user_id, pattern, card_id)
+- `transaction_allocations`: `plaid_transaction_id`, `bucket`, `note`. Unique (user_id, plaid_transaction_id)
+- `payoffs`: `card_id`, `period_start`, `period_end`, `due_date`, `statement_amount`, `allocations` JSONB, `transfers` JSONB, `paid_at`. Unique (user_id, card_id, period_end)
+
 ### `sync_cursors`
 Tracks the Plaid sync cursor for incremental transaction fetching per item.
 - `item_id` (TEXT) — which Plaid item (bank connection) this cursor is for
@@ -491,6 +499,15 @@ User-defined credit cards with due dates and which bucket pays them.
   - Income: clusters deposits (negative Plaid amounts) by ±5% amount tolerance, returns top 2 streams
   - Bills: groups outgoing charges by merchant name, keeps monthly-ish (20–40 day intervals), deduplicates by `mappedBillKey`
   - Called during onboarding Step 11 so the user can confirm what was auto-detected
+
+### Payoff & P&L (server/payoff.js, Oct 2026)
+- `GET /api/payoff/:card_id?start=&end=` — statement window (from `credit_cards.statement_close_day`, override with start/end), card transactions each tagged with a `bucket` (manual override → rule → card's `paid_from_bucket`), totals by bucket, `transfers` to make into the paying bucket, Plaid `statement_balance` from the latest snapshot, and the `completed` payoff row if any
+- `POST /api/payoff/allocate` — `{ plaid_transaction_id, bucket, save_rule?, card_id? }` set a transaction's bucket; `save_rule` also creates an `allocation_rules` row from its merchant name
+- `GET/POST /api/payoff/rules`, `DELETE /api/payoff/rules/:id` — merchant-substring → bucket rules (card-specific rules beat global, longer patterns beat shorter)
+- `POST /api/payoff/complete` — record that the transfers were made and the card paid (`payoffs` table, upsert on card + period_end)
+- `GET /api/payoff/history`
+- `GET /api/pnl?month=YYYY-MM` — household income statement for a calendar month: income (negative amounts on checking), spending by bucket and by Plaid category (card charges allocated like payoff), net, Live planned (app_config bills) vs actual, and the excluded internal transfers / card payments
+- Buckets: `give, save, live, person1, person2, marriage_starter`. Money never moves; the app only computes and records.
 
 ### Test Mode
 - `POST /api/test-reset` — Wipes all 8 user data tables without deleting auth account (test mode only, localhost only)
