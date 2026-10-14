@@ -60,72 +60,58 @@ const authFetch = async (url, options = {}) => {
   }
 };
 
-// ─── Ink Wash Theme System ───────────────────────────────────────────────────
+// ─── Theme System (light/dark, powder blue accent) ───────────────────────────────────────────────────
 // The app used to have hardcoded hex colors everywhere (#0f172a, #1e293b, etc).
 // Now we define a theme object with semantic tokens so the entire UI can switch
 // between light/dark modes and even let developers tweak the base palette.
 
 const themes = {
   dark: {
-    bg: '#4A4A4A',           // inkDark — main background
-    cardBg: '#5A5A5A',       // slightly lighter — card surfaces
-    cardBgElevated: '#6A6A6A', // even lighter — elevated panels
-    border: '#6D8196',       // inkSlate — borders and dividers
-    text: '#FFFFE3',         // inkCream — primary text
-    textMuted: '#CBCBCB',    // inkLight — secondary text
-    textDimmed: '#6D8196',   // inkSlate — tertiary/disabled text
-    accent: '#6D8196',       // inkSlate — accent color
-    success: '#7BAF9A',      // muted green — positive states
-    danger: '#C47B7B',       // muted red — negative states
-    warning: '#C4A46B',      // muted amber — warning states
-    // Account colors (desaturated to blend with Ink Wash)
-    give: '#9B8EC0', save: '#7BAF9A', live: '#7B9EC5',
-    mat: '#C4A46B', mara: '#C48BA0',
-    // Derived semantic colors for alert/positive backgrounds
-    dangerBg: 'rgba(196, 123, 123, 0.15)',
-    successBg: 'rgba(123, 175, 154, 0.15)',
-    accentBg: 'rgba(109, 129, 150, 0.15)',
-    dangerLight: '#D9A3A3',   // lighter red for text on dark danger bg
-    successLight: '#A3D4BD',  // lighter green for text on dark success bg
+    bg: '#0F1115',            // near-black
+    cardBg: '#171A20',
+    cardBgElevated: '#1F242C',
+    border: '#2A3038',
+    text: '#E8ECF1',
+    textMuted: '#A3ADBA',
+    textDimmed: '#6B7684',
+    accent: '#8FB8DE',        // powder blue
+    onAccent: '#0F1115',
+    success: '#5FB58A',
+    danger: '#E07A7A',
+    warning: '#D9A75B',
+    // Buckets
+    give: '#B4A7E5', save: '#6CC29A', live: '#8FB8DE',
+    mat: '#4D8BE8', mara: '#E8A0B4',
+    dangerBg: 'rgba(224, 122, 122, 0.14)',
+    successBg: 'rgba(95, 181, 138, 0.14)',
+    accentBg: 'rgba(143, 184, 222, 0.14)',
+    dangerLight: '#F0A3A3',
+    successLight: '#9ADBB8',
   },
   light: {
-    bg: '#FFFFE3',           // inkCream
-    cardBg: '#F5F5D0',       // slightly darker cream
-    cardBgElevated: '#EBEBC0',
-    border: '#CBCBCB',       // inkLight
-    text: '#4A4A4A',         // inkDark
-    textMuted: '#6D8196',    // inkSlate
-    textDimmed: '#CBCBCB',
-    accent: '#6D8196',
-    success: '#5A8F72',
-    danger: '#A05555',
-    warning: '#9A7D3D',
-    give: '#7B6EA0', save: '#5A8F72', live: '#5B7EA5',
-    mat: '#9A7D3D', mara: '#A06B80',
-    dangerBg: 'rgba(160, 85, 85, 0.1)',
-    successBg: 'rgba(90, 143, 114, 0.1)',
-    accentBg: 'rgba(109, 129, 150, 0.1)',
-    dangerLight: '#A05555',
-    successLight: '#5A8F72',
+    bg: '#F6F8FB',
+    cardBg: '#FFFFFF',
+    cardBgElevated: '#EEF2F7',
+    border: '#DCE3EC',
+    text: '#121820',
+    textMuted: '#5B6673',
+    textDimmed: '#98A3B1',
+    accent: '#3F84CC',        // powder blue, deepened for contrast on white
+    onAccent: '#FFFFFF',
+    success: '#2E9E6B',
+    danger: '#D2544F',
+    warning: '#C58A1F',
+    give: '#7C6BC9', save: '#2E9E6B', live: '#3F84CC',
+    mat: '#2D64C2', mara: '#C4607F',
+    dangerBg: 'rgba(210, 84, 79, 0.10)',
+    successBg: 'rgba(46, 158, 107, 0.10)',
+    accentBg: 'rgba(63, 132, 204, 0.10)',
+    dangerLight: '#B4443F',
+    successLight: '#237D55',
   }
 };
 
-// Factory defaults — deep copy so resets always get the original values
-const DEFAULT_THEMES = JSON.parse(JSON.stringify(themes));
 const DEFAULT_FONTS = { body: 'Inter', heading: 'Inter', baseSize: 16, headingWeight: '700' };
-const FONT_OPTIONS = [
-  'Inter', 'Roboto', 'Poppins', 'Lato', 'Open Sans', 'Montserrat',
-  'Source Sans Pro', 'Nunito', 'Raleway', 'Playfair Display',
-  'Merriweather', 'Fira Sans', 'IBM Plex Sans', 'Space Grotesky', 'DM Sans',
-];
-const COLOR_GROUPS = [
-  { label: 'Backgrounds', keys: ['bg', 'cardBg', 'cardBgElevated'] },
-  { label: 'Text', keys: ['text', 'textMuted', 'textDimmed'] },
-  { label: 'UI', keys: ['border', 'accent'] },
-  { label: 'Status', keys: ['success', 'danger', 'warning'] },
-  { label: 'Accounts', keys: ['give', 'save', 'live', 'mat', 'mara'] },
-  { label: 'Derived', keys: ['dangerBg', 'successBg', 'accentBg', 'dangerLight', 'successLight'] },
-];
 
 // Creates the full styles object using the active theme's color tokens.
 // This replaces ~1400 lines of hardcoded hex colors with semantic theme references.
@@ -2007,41 +1993,11 @@ export default function App() {
   const [transactionsTotal, setTransactionsTotal] = useState(0);
 
   // ─── Theme state ────────────────────────────────────────────────────────────
-  // themeMode: 'dark' or 'light' — persisted in localStorage
-  // customThemes: per-mode color overrides + font settings, persisted in localStorage
-  // editingMode: which mode's colors are shown in the Theme Editor (independent of active mode)
-  // settingsTab: 'general' or 'theme' — sub-tab within Settings
+  // themeMode: 'dark' or 'light', persisted in localStorage. Palette lives in `themes` above.
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem('flipThemeMode') || 'dark');
-  const [customThemes, setCustomThemes] = useState(() => {
-    const saved = localStorage.getItem('flipCustomThemes');
-    if (saved) { try { return JSON.parse(saved); } catch { /* ignore bad JSON */ } }
-    return { dark: { ...DEFAULT_THEMES.dark }, light: { ...DEFAULT_THEMES.light }, fonts: { ...DEFAULT_FONTS } };
-  });
-  const [editingMode, setEditingMode] = useState('dark');
-  const [settingsTab, setSettingsTab] = useState('general');
-
-  // Derive the active theme from customThemes (which may have user overrides)
-  const theme = customThemes[themeMode];
-  const fonts = customThemes.fonts;
-  // Build the full styles object using the active theme's color tokens + fonts
+  const theme = themes[themeMode];
+  const fonts = DEFAULT_FONTS;
   const styles = createStyles(theme, fonts);
-
-  // ─── Theme Editor helpers ──────────────────────────────────────────────────
-  const updateThemeColor = (mode, key, value) => {
-    setCustomThemes(prev => ({ ...prev, [mode]: { ...prev[mode], [key]: value } }));
-  };
-  const updateFont = (key, value) => {
-    setCustomThemes(prev => ({ ...prev, fonts: { ...prev.fonts, [key]: value } }));
-  };
-  const copyThemeMode = (from, to) => {
-    setCustomThemes(prev => ({ ...prev, [to]: { ...prev[from] } }));
-  };
-  const resetSingleColor = (mode, key) => {
-    setCustomThemes(prev => ({ ...prev, [mode]: { ...prev[mode], [key]: DEFAULT_THEMES[mode][key] } }));
-  };
-  const resetAllTheme = () => {
-    setCustomThemes({ dark: { ...DEFAULT_THEMES.dark }, light: { ...DEFAULT_THEMES.light }, fonts: { ...DEFAULT_FONTS } });
-  };
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState('menu'); // 'menu' | 'settings' | 'updateCards'
@@ -2473,32 +2429,6 @@ export default function App() {
     localStorage.setItem('flipThemeMode', themeMode);
   }, [themeMode]);
 
-  // Persist custom themes (colors + fonts) to localStorage
-  useEffect(() => {
-    localStorage.setItem('flipCustomThemes', JSON.stringify(customThemes));
-  }, [customThemes]);
-
-  // Load Google Fonts dynamically when selected fonts change
-  useEffect(() => {
-    const fontsToLoad = [...new Set([customThemes.fonts.body, customThemes.fonts.heading])];
-    const weights = '400;500;600;700;800';
-    const families = fontsToLoad.map(f => `family=${f.replace(/ /g, '+')}:wght@${weights}`).join('&');
-    const href = `https://fonts.googleapis.com/css2?${families}&display=swap`;
-    let link = document.getElementById('flip-google-fonts');
-    if (!link) {
-      link = document.createElement('link');
-      link.id = 'flip-google-fonts';
-      link.rel = 'stylesheet';
-      document.head.appendChild(link);
-    }
-    link.href = href;
-  }, [customThemes.fonts.body, customThemes.fonts.heading]);
-
-  // Apply root font size for rem-based scaling
-  useEffect(() => {
-    document.documentElement.style.fontSize = customThemes.fonts.baseSize + 'px';
-    return () => { document.documentElement.style.fontSize = ''; };
-  }, [customThemes.fonts.baseSize]);
 
   // Track viewport width for responsive side-by-side layout
   useEffect(() => {
@@ -4356,27 +4286,25 @@ export default function App() {
                   <h2 style={{ fontSize: '1.125rem', fontWeight: '600', margin: 0 }}>Settings</h2>
                   <button onClick={() => setMenuOpen(false)} style={styles.menuCloseButton}>X</button>
                 </div>
-                {/* Settings sub-tab bar */}
-                <div style={styles.settingsTabBar}>
-                  <button
-                    onClick={() => setSettingsTab('general')}
-                    style={{ ...styles.settingsTab, ...(settingsTab === 'general' ? styles.settingsTabActive : {}) }}
-                  >
-                    General
-                  </button>
-                  <button
-                    onClick={() => setSettingsTab('theme')}
-                    style={{ ...styles.settingsTab, ...(settingsTab === 'theme' ? styles.settingsTabActive : {}) }}
-                  >
-                    Theme Editor
-                  </button>
-                </div>
-
                 <section style={{ padding: '0 1rem 1rem' }}>
-                  {/* ═══ General Tab ═══ */}
-                  {settingsTab === 'general' && (
-                    <>
+                  <>
                       <div style={styles.settingsContainer}>
+                        {/* Appearance */}
+                        <div style={styles.settingsSection}>
+                          <h3 style={styles.settingsSectionTitle}>Appearance</h3>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '0.875rem', color: theme.text }}>Theme</span>
+                            <div style={{ display: 'flex', gap: '0.25rem', background: theme.cardBgElevated, borderRadius: '2rem', padding: 2 }}>
+                              {['light', 'dark'].map(m => (
+                                <button key={m} onClick={() => setThemeMode(m)} style={{
+                                  padding: '0.4rem 1rem', border: 'none', borderRadius: '2rem', cursor: 'pointer', fontSize: '0.8125rem', fontWeight: 600,
+                                  background: themeMode === m ? theme.accent : 'transparent', color: themeMode === m ? theme.onAccent : theme.textMuted,
+                                }}>{m === 'light' ? 'Light' : 'Dark'}</button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
                         {/* Income Section */}
                         <div style={styles.settingsSection}>
                           <h3 style={styles.settingsSectionTitle}>Income</h3>
@@ -4695,181 +4623,6 @@ export default function App() {
                     </>
                   )}
 
-                  {/* ═══ Theme Editor Tab ═══ */}
-                  {settingsTab === 'theme' && (
-                    <div style={styles.settingsContainer}>
-                      {/* A. Mode Controls */}
-                      <div style={styles.settingsSection}>
-                        <h3 style={styles.settingsSectionTitle}>Mode Controls</h3>
-                        {/* Active Mode toggle */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                          <span style={{ fontSize: '0.875rem', color: theme.text }}>Active Mode</span>
-                          <button
-                            onClick={() => setThemeMode(prev => prev === 'dark' ? 'light' : 'dark')}
-                            style={{
-                              padding: '0.5rem 1.25rem',
-                              backgroundColor: themeMode === 'dark' ? theme.cardBgElevated : theme.cardBg,
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: '2rem',
-                              color: theme.text,
-                              fontSize: '0.8125rem',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              transition: 'all 0.2s',
-                              minWidth: '80px',
-                              textAlign: 'center',
-                            }}
-                          >
-                            {themeMode === 'dark' ? 'Dark' : 'Light'}
-                          </button>
-                        </div>
-                        {/* Editing Mode toggle */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                          <span style={{ fontSize: '0.875rem', color: theme.text }}>Editing Colors For</span>
-                          <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            {['dark', 'light'].map(mode => (
-                              <button
-                                key={mode}
-                                onClick={() => setEditingMode(mode)}
-                                style={{
-                                  padding: '0.375rem 1rem',
-                                  backgroundColor: editingMode === mode ? theme.accent : 'transparent',
-                                  border: `1px solid ${theme.border}`,
-                                  borderRadius: '0.375rem',
-                                  color: editingMode === mode ? '#fff' : theme.textMuted,
-                                  fontSize: '0.8125rem',
-                                  fontWeight: '600',
-                                  cursor: 'pointer',
-                                  transition: 'all 0.2s',
-                                  textTransform: 'capitalize',
-                                }}
-                              >
-                                {mode}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {/* Copy buttons */}
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <button
-                            onClick={() => copyThemeMode('dark', 'light')}
-                            style={{ ...styles.settingsSaveButton, flex: 1, fontSize: '0.75rem', padding: '0.5rem' }}
-                          >
-                            Copy Dark → Light
-                          </button>
-                          <button
-                            onClick={() => copyThemeMode('light', 'dark')}
-                            style={{ ...styles.settingsSaveButton, flex: 1, fontSize: '0.75rem', padding: '0.5rem' }}
-                          >
-                            Copy Light → Dark
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* B. Color Groups */}
-                      <div style={styles.settingsSection}>
-                        <h3 style={styles.settingsSectionTitle}>Colors ({editingMode})</h3>
-                        {COLOR_GROUPS.map(group => (
-                          <div key={group.label}>
-                            <div style={styles.colorGroupTitle}>{group.label}</div>
-                            {group.keys.map(key => {
-                              const value = customThemes[editingMode][key] || '';
-                              const isRgba = value.startsWith('rgba');
-                              const isDefault = value === DEFAULT_THEMES[editingMode][key];
-                              return (
-                                <div key={key} style={styles.colorRow}>
-                                  {!isRgba && (
-                                    <input
-                                      type="color"
-                                      value={value}
-                                      onChange={(e) => updateThemeColor(editingMode, key, e.target.value)}
-                                      style={styles.colorSwatch}
-                                    />
-                                  )}
-                                  <span style={{ ...styles.colorLabel, ...(isRgba ? { minWidth: '90px' } : {}) }}>{key}</span>
-                                  <input
-                                    type="text"
-                                    value={value}
-                                    onChange={(e) => updateThemeColor(editingMode, key, e.target.value)}
-                                    style={styles.colorHexInput}
-                                  />
-                                  {!isDefault && (
-                                    <button
-                                      onClick={() => resetSingleColor(editingMode, key)}
-                                      style={styles.resetIconButton}
-                                      title="Reset to default"
-                                    >
-                                      ↺
-                                    </button>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* C. Typography */}
-                      <div style={styles.settingsSection}>
-                        <h3 style={styles.settingsSectionTitle}>Typography</h3>
-                        <div style={styles.settingsGrid}>
-                          <div style={styles.settingsInputGroup}>
-                            <label style={styles.settingsLabel}>Body Font</label>
-                            <select
-                              value={customThemes.fonts.body}
-                              onChange={(e) => updateFont('body', e.target.value)}
-                              style={styles.settingsInput}
-                            >
-                              {FONT_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
-                            </select>
-                          </div>
-                          <div style={styles.settingsInputGroup}>
-                            <label style={styles.settingsLabel}>Heading Font</label>
-                            <select
-                              value={customThemes.fonts.heading}
-                              onChange={(e) => updateFont('heading', e.target.value)}
-                              style={styles.settingsInput}
-                            >
-                              {FONT_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
-                            </select>
-                          </div>
-                          <div style={styles.settingsInputGroup}>
-                            <label style={styles.settingsLabel}>Base Font Size: {customThemes.fonts.baseSize}px</label>
-                            <input
-                              type="range"
-                              min="12"
-                              max="20"
-                              value={customThemes.fonts.baseSize}
-                              onChange={(e) => updateFont('baseSize', parseInt(e.target.value))}
-                              style={{ width: '100%', cursor: 'pointer' }}
-                            />
-                          </div>
-                          <div style={styles.settingsInputGroup}>
-                            <label style={styles.settingsLabel}>Heading Weight</label>
-                            <select
-                              value={customThemes.fonts.headingWeight}
-                              onChange={(e) => updateFont('headingWeight', e.target.value)}
-                              style={styles.settingsInput}
-                            >
-                              {['400', '500', '600', '700', '800'].map(w => (
-                                <option key={w} value={w}>{w}</option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* D. Reset All */}
-                      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '0.5rem' }}>
-                        <button
-                          onClick={resetAllTheme}
-                          style={{ ...styles.resetButton, fontSize: '0.875rem' }}
-                        >
-                          Reset All to Defaults
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </section>
               </div>
             )}
@@ -6337,7 +6090,7 @@ styleSheet.textContent = `
     box-sizing: border-box;
   }
   body {
-    background-color: #4A4A4A;
+    background-color: #0F1115;
   }
   @keyframes spin {
     to { transform: rotate(360deg); }

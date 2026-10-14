@@ -252,7 +252,7 @@ function BucketPicker({ txn, bucketMeta, theme, s, onClose, onPick }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
           {BUCKET_ORDER.map(b => (
             <button key={b} onClick={() => onPick(b, always)}
-              style={{ ...s.secondaryBtn, borderColor: bucketMeta[b].color, ...(txn.bucket === b ? { background: bucketMeta[b].color, color: '#fff' } : {}) }}>
+              style={{ ...s.secondaryBtn, borderColor: bucketMeta[b].color, ...(txn.bucket === b ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
               {bucketMeta[b].label}
             </button>
           ))}
@@ -406,17 +406,17 @@ const makeStyles = (theme) => ({
   sectionTitle: { fontSize: '0.75rem', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: '0.4rem' },
   segment: { display: 'flex', background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 2 },
   segmentBtn: { background: 'transparent', border: 'none', color: theme.textMuted, padding: '0.35rem 0.8rem', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer' },
-  segmentBtnActive: { background: theme.accent, color: '#fff' },
+  segmentBtnActive: { background: theme.accent, color: theme.onAccent },
   chip: { flex: '0 0 auto', background: theme.cardBg, border: `1px solid ${theme.border}`, color: theme.text, borderRadius: 999, padding: '0.45rem 0.9rem', fontSize: '0.85rem', cursor: 'pointer', whiteSpace: 'nowrap' },
-  chipActive: { background: theme.accent, borderColor: theme.accent, color: '#fff' },
+  chipActive: { background: theme.accent, borderColor: theme.accent, color: theme.onAccent },
   iconBtn: { background: theme.cardBgElevated, border: 'none', color: theme.text, width: 34, height: 34, borderRadius: 17, fontSize: '1.2rem', cursor: 'pointer' },
-  primaryBtn: { background: theme.success, color: '#fff', border: 'none', borderRadius: 10, padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' },
+  primaryBtn: { background: theme.success, color: theme.onAccent, border: 'none', borderRadius: 10, padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer' },
   secondaryBtn: { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 10, padding: '0.6rem 0.8rem', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer' },
   linkBtn: { background: 'none', border: 'none', color: theme.accent, cursor: 'pointer', fontSize: '0.85rem', padding: '0.25rem' },
   note: { background: theme.accentBg, color: theme.textMuted, borderRadius: 8, padding: '0.5rem 0.7rem', fontSize: '0.8rem' },
   transferRow: { display: 'flex', alignItems: 'center', padding: '0.35rem 0', fontSize: '0.95rem' },
   txnRow: { display: 'flex', alignItems: 'center', padding: '0.6rem 0.25rem', borderBottom: `1px solid ${theme.border}`, color: theme.text },
-  bucketTag: { border: 'none', color: '#fff', borderRadius: 999, padding: '0.15rem 0.6rem', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', marginTop: 2 },
+  bucketTag: { border: 'none', color: theme.onAccent, borderRadius: 999, padding: '0.15rem 0.6rem', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', marginTop: 2 },
   sheetBackdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end', zIndex: 50 },
   sheet: { width: '100%', maxWidth: 520, margin: '0 auto', background: theme.cardBg, color: theme.text, borderRadius: '16px 16px 0 0', padding: '1rem 1rem 1.5rem', border: `1px solid ${theme.border}` },
 });
