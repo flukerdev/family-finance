@@ -37,6 +37,9 @@ const addDays = (s, n) => { const d = parse(s); d.setUTCDate(d.getUTCDate() + n)
 const daysInMonth = (y, m0) => new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
 // Date in (year, month0) on `day`, clamped to month length (so "31" works in Feb).
 const onDay = (y, m0, day) => ymd(new Date(Date.UTC(y, m0, Math.min(day, daysInMonth(y, m0)))));
+// 'Today' in the household's timezone, not the server's (Vercel runs in UTC).
+const TZ = process.env.HOUSEHOLD_TZ || 'America/New_York';
+export const todayLocal = () => new Date().toLocaleDateString('en-CA', { timeZone: TZ });
 
 // Most recent occurrence of `day` on or before `today`.
 function lastOccurrence(today, day) {
@@ -56,7 +59,7 @@ function nextOccurrence(from, day) {
 }
 
 // Statement window for a card given its close day. Returns { start, end, due }.
-export function statementWindow(card, today = ymd(new Date())) {
+export function statementWindow(card, today = todayLocal()) {
   const closeDay = card.statement_close_day || 1;
   const end = lastOccurrence(today, closeDay);
   const prevEnd = lastOccurrence(addDays(end, -1), closeDay);
@@ -275,7 +278,7 @@ router.get('/payoff/:card_id', async (req, res) => {
     const transfersIn = num(transfers.reduce((s, t) => s + t.amount, 0));
     const cushion = Number(cfg?.cushion ?? 0);
     const afterPayment = payingBalance != null ? num(payingBalance + transfersIn - statementAmount) : null;
-    const daysUntilDue = computed.due ? Math.round((parse(computed.due) - parse(ymd(new Date()))) / 86400000) : null;
+    const daysUntilDue = computed.due ? Math.round((parse(computed.due) - parse(todayLocal())) / 86400000) : null;
     const needsReview = allocated.filter(t => t.needs_review);
     // The balance sync falls back to the current balance when Plaid has no last_statement_balance,
     // so statement === total means "unknown", not "statement equals current".
@@ -319,7 +322,7 @@ const isCardType = (type, cardIds) => cardIds.has(type) || cardIds.has(type.repl
 
 router.get('/pnl', async (req, res) => {
   try {
-    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : ymd(new Date()).slice(0, 7);
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : todayLocal().slice(0, 7);
     const [y, m] = month.split('-').map(Number);
     const start = `${month}-01`;
     const end = `${month}-${pad(daysInMonth(y, m - 1))}`;
