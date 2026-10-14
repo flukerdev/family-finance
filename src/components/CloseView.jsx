@@ -58,6 +58,7 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   const [reviewing, setReviewing] = useState(false);  // card-stack review queue open
   const [editingStatement, setEditingStatement] = useState(false);
   const [statementInput, setStatementInput] = useState('');
+  const [periodInput, setPeriodInput] = useState({ start: '', end: '' });
   const [showCharges, setShowCharges] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [rules, setRules] = useState([]);
@@ -96,11 +97,13 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
   const saveStatement = async () => {
     const amt = Number(String(statementInput).replace(/[^0-9.]/g, ''));
     if (!(amt >= 0) || !data) return;
+    const ok = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
     await authFetch(`${apiUrl}/api/payoff/statement`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_id: cardId, period_start: data.period.start, period_end: data.period.end, due_date: data.period.due, statement_amount: amt }),
+      body: JSON.stringify({ card_id: cardId, period_start: ok(periodInput.start) ? periodInput.start : data.period.start,
+        period_end: ok(periodInput.end) ? periodInput.end : data.period.end, due_date: data.period.due, statement_amount: amt }),
     });
-    setEditingStatement(false); await load();
+    setEditingStatement(false); setRange(null); await load();
   };
 
   const deleteRule = async (id) => { await authFetch(`${apiUrl}/api/payoff/rules/${id}`, { method: 'DELETE' }); await loadRules(); await load(); };
@@ -183,11 +186,20 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.7rem', color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>Statement {fmtDate(data.period.start)} – {fmtDate(data.period.end)}</div>
                 {editingStatement ? (
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                    <input autoFocus inputMode="decimal" value={statementInput} onChange={e => setStatementInput(e.target.value)} placeholder="Balance from your statement"
-                      onKeyDown={e => e.key === 'Enter' && saveStatement()}
-                      style={{ flex: 1, background: theme.cardBg, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.4rem 0.6rem', fontSize: '1rem' }} />
-                    <button onClick={saveStatement} style={{ ...s.primaryBtn, padding: '0.4rem 0.8rem' }}>Save</button>
+                  <div style={{ marginTop: 4 }}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input autoFocus inputMode="decimal" value={statementInput} onChange={e => setStatementInput(e.target.value)} placeholder="New balance on the statement"
+                        onKeyDown={e => e.key === 'Enter' && saveStatement()}
+                        style={{ flex: 1, minWidth: 0, background: theme.cardBg, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '0.4rem 0.6rem', fontSize: '1rem' }} />
+                      <button onClick={saveStatement} style={{ ...s.primaryBtn, padding: '0.4rem 0.8rem' }}>Save</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, fontSize: '0.8rem', color: theme.textMuted }}>
+                      <span>Period</span>
+                      <input type="date" value={periodInput.start} onChange={e => setPeriodInput(p => ({ ...p, start: e.target.value }))} style={{ background: theme.cardBg, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '0.25rem 0.4rem' }} />
+                      <span>to</span>
+                      <input type="date" value={periodInput.end} onChange={e => setPeriodInput(p => ({ ...p, end: e.target.value }))} style={{ background: theme.cardBg, color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '0.25rem 0.4rem' }} />
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: theme.textDimmed, marginTop: 4 }}>Use the dates printed on the statement. Plaid dates charges a day late, so the window lines up as-is.</div>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -198,7 +210,7 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
                   </div>
                 )}
               </div>
-              {!editingStatement && <button onClick={() => { setStatementInput(st.entered ?? ''); setEditingStatement(true); }} style={s.linkBtn}>{st.source === 'entered' ? 'edit' : 'enter'}</button>}
+              {!editingStatement && <button onClick={() => { setStatementInput(st.entered ?? ''); setPeriodInput({ start: data.period.start, end: data.period.end }); setEditingStatement(true); }} style={s.linkBtn}>{st.source === 'entered' ? 'edit' : 'enter'}</button>}
             </div>
             {Math.abs(st.difference) > 0.5 && (
               <div style={{ fontSize: '0.75rem', color: theme.textMuted, marginTop: 6 }}>
@@ -317,6 +329,9 @@ function ReviewStack({ queue, bucketMeta, theme, s, onPick, onClose }) {
         <div style={{ height: 4, background: theme.cardBgElevated, borderRadius: 2, marginBottom: '1rem' }}><div style={{ width: `${(i / items.length) * 100}%`, height: '100%', background: theme.accent, borderRadius: 2, transition: 'width .2s' }} /></div>
         <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>{fmtDateLong(txn.date)}{cat?.primary ? ` · ${titleCase(cat.primary)}` : ''}</div>
         <div style={{ fontSize: '1.25rem', fontWeight: 700, margin: '0.15rem 0' }}>{txn.merchant_name || txn.name}</div>
+        {txn.merchant_name && txn.name && txn.name.toLowerCase().replace(/[^a-z]/g, '').indexOf(txn.merchant_name.toLowerCase().replace(/[^a-z]/g, '').slice(0, 5)) < 0 && (
+          <div style={{ fontSize: '0.75rem', color: theme.textDimmed, fontFamily: 'ui-monospace, monospace' }}>bank text: {txn.name}</div>
+        )}
         <div style={{ fontSize: '2rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: txn.amount < 0 ? theme.success : theme.text }}>{txn.amount < 0 ? '+' : ''}{fmt(Math.abs(txn.amount))}</div>
         <div style={{ fontSize: '0.8rem', color: theme.textMuted, margin: '0.5rem 0 0.75rem' }}>
           {txn.source === 'rule' ? `Guess: ${bucketMeta[txn.bucket]?.label} (rule "${txn.rule_pattern}", still learning). Confirm or correct.` : 'Who pays for this?'}

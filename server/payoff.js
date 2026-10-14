@@ -221,7 +221,10 @@ router.post('/payoff/complete', async (req, res) => {
 router.post('/payoff/statement', async (req, res) => {
   const { card_id, period_start, period_end, due_date = null, statement_amount } = req.body || {};
   if (!card_id || !period_start || !period_end || !(Number(statement_amount) >= 0)) return res.status(400).json({ error: 'card_id, period_start, period_end, statement_amount required' });
-  const { data: existing } = await req.supabase.from('payoffs').select('paid_at').eq('card_id', card_id).eq('period_end', period_end).maybeSingle();
+  const { data: near } = await req.supabase.from('payoffs').select('id, paid_at, period_end').eq('card_id', card_id)
+    .gte('period_end', addDays(period_end, -5)).lte('period_end', addDays(period_end, 5));
+  const existing = (near || [])[0] || null;
+  for (const r of (near || [])) if (r.period_end !== period_end) await req.supabase.from('payoffs').delete().eq('id', r.id);
   const row = { user_id: req.userId, card_id, period_start, period_end, due_date, statement_amount: num(statement_amount), paid_at: existing?.paid_at || null };
   const { data, error } = await req.supabase.from('payoffs').upsert(row, { onConflict: 'user_id,card_id,period_end' }).select().single();
   if (error) return res.status(500).json({ error: error.message });
@@ -243,14 +246,20 @@ router.get('/payoff/:card_id', async (req, res) => {
 
     const computed = statementWindow(card);
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-    const start = dateRe.test(req.query.start || '') ? req.query.start : computed.start;
-    const end = dateRe.test(req.query.end || '') ? req.query.end : computed.end;
+    let start = dateRe.test(req.query.start || '') ? req.query.start : computed.start;
+    let end = dateRe.test(req.query.end || '') ? req.query.end : computed.end;
     const payingBucket = card.paid_from_bucket || 'live';
 
-    const [{ data: txns, error: txnErr }, { data: snap }, { data: prior }, { data: cfg }] = await Promise.all([
+    // A saved statement for this cycle (matched by close date, +/- 3 days) pins the exact window,
+    // because real statement periods drift a day or two around the nominal close day.
+    const { data: priorRows } = await req.supabase.from('payoffs').select('*').eq('card_id', cardId)
+      .gte('period_end', addDays(end, -3)).lte('period_end', addDays(end, 3)).order('period_end', { ascending: false }).limit(1);
+    const prior = priorRows?.[0] || null;
+    if (prior && !req.query.start && !req.query.end) { start = prior.period_start; end = prior.period_end; }
+
+    const [{ data: txns, error: txnErr }, { data: snap }, { data: cfg }] = await Promise.all([
       cardTxnQuery(req.supabase, cardId, start, end),
       req.supabase.from('balance_snapshots').select('buckets, cards, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      req.supabase.from('payoffs').select('*').eq('card_id', cardId).eq('period_end', end).maybeSingle(),
       req.supabase.from('app_config').select('cushion').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]);
     if (txnErr) return res.status(500).json({ error: txnErr.message });
@@ -296,7 +305,7 @@ router.get('/payoff/:card_id', async (req, res) => {
       needs_review_ids: needsReview.map(t => t.plaid_transaction_id),
       payments: payments.map(t => ({ date: t.date, amount: Math.abs(Number(t.amount)), name: t.merchant_name || t.name })),
       card,
-      period: { start, end, due: computed.due, computed: start === computed.start && end === computed.end },
+      period: { start, end, due: prior?.due_date || computed.due, computed: start === computed.start && end === computed.end, pinned: !!prior },
       paying_bucket: payingBucket,
       transactions: allocated,
       pending_count: (txns || []).length - list.length,
