@@ -1054,7 +1054,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     backgroundColor: theme.accent,
     border: 'none',
     borderRadius: '0.75rem',
-    color: '#fff',
+    color: theme.onAccent,
     fontSize: '1rem',
     fontWeight: '600',
     cursor: 'pointer',
@@ -1259,7 +1259,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     backgroundColor: theme.accent,
     border: 'none',
     borderRadius: '0.5rem',
-    color: '#fff',
+    color: theme.onAccent,
     fontSize: '1rem',
     fontWeight: '600',
     cursor: 'pointer',
@@ -1270,7 +1270,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     backgroundColor: theme.danger,
     border: 'none',
     borderRadius: '0.5rem',
-    color: '#fff',
+    color: theme.onAccent,
     fontSize: '1rem',
     fontWeight: '600',
     cursor: 'pointer',
@@ -1286,7 +1286,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     backgroundColor: theme.give,
     border: 'none',
     borderRadius: '0.75rem',
-    color: '#fff',
+    color: theme.onAccent,
     fontSize: '1rem',
     fontWeight: '600',
     cursor: 'pointer',
@@ -1438,7 +1438,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     justifyContent: 'center',
     fontSize: '2rem',
     fontWeight: '700',
-    color: '#fff',
+    color: theme.onAccent,
     backfaceVisibility: 'hidden',
     boxShadow: `0 4px 20px ${theme.accentBg}`,
   },
@@ -1453,7 +1453,7 @@ const createStyles = (theme, fonts = DEFAULT_FONTS) => ({
     justifyContent: 'center',
     fontSize: '2rem',
     fontWeight: '700',
-    color: '#fff',
+    color: theme.onAccent,
     backfaceVisibility: 'hidden',
     transform: 'rotateY(180deg)',
     boxShadow: `0 4px 20px ${theme.successBg}`,
@@ -3933,7 +3933,7 @@ export default function App() {
               style={{
                 width: '100%', padding: '0.75rem',
                 backgroundColor: (authMode === 'signup' && !signupConsent) ? theme.border : theme.accent,
-                border: 'none', borderRadius: '0.5rem', color: '#fff',
+                border: 'none', borderRadius: '0.5rem', color: theme.onAccent,
                 fontSize: '1rem', fontWeight: '600',
                 cursor: (authMode === 'signup' && !signupConsent) ? 'not-allowed' : 'pointer',
               }}
@@ -4102,7 +4102,7 @@ export default function App() {
               style={{
                 width: '100%', padding: '0.75rem',
                 backgroundColor: otpCode.length === 6 ? theme.accent : theme.border,
-                border: 'none', borderRadius: '0.5rem', color: '#fff',
+                border: 'none', borderRadius: '0.5rem', color: theme.onAccent,
                 fontSize: '1rem', fontWeight: '600',
                 cursor: otpCode.length === 6 ? 'pointer' : 'not-allowed',
               }}
@@ -4432,7 +4432,7 @@ export default function App() {
                               onClick={grantPlaidConsent}
                               style={{
                                 width: '100%', padding: '0.75rem', backgroundColor: theme.accent,
-                                border: 'none', borderRadius: '0.5rem', color: '#fff',
+                                border: 'none', borderRadius: '0.5rem', color: theme.onAccent,
                                 fontSize: '0.875rem', fontWeight: '600', cursor: 'pointer',
                               }}
                             >
@@ -4502,7 +4502,7 @@ export default function App() {
                                         style={{
                                           padding: '0.25rem 0.75rem', backgroundColor: theme.danger,
                                           border: 'none', borderRadius: '0.25rem',
-                                          color: '#fff', fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer',
+                                          color: theme.onAccent, fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer',
                                         }}
                                       >
                                         Confirm
@@ -4593,7 +4593,7 @@ export default function App() {
                                 }}
                                 style={{
                                   flex: 1, padding: '0.75rem', backgroundColor: theme.danger,
-                                  border: 'none', borderRadius: '0.5rem', color: '#fff',
+                                  border: 'none', borderRadius: '0.5rem', color: theme.onAccent,
                                   fontSize: '0.875rem', fontWeight: '600', cursor: 'pointer',
                                 }}
                               >
