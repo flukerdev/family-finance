@@ -164,6 +164,8 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   }, [sync, loadCards, loadItems, loadSnapshot, loadSummaries, loadOwed]);
 
   useEffect(() => { (async () => { await loadConfig(); await refreshAll(false); })(); }, []);
+  // Coming back to Home after a payoff or a mapping change: re-read local state, no Plaid call.
+  useEffect(() => { if (view === 'home' && cards.length) { loadSummaries(cards); loadOwed(); loadSnapshot(); } }, [view]);
 
   const showToast = (t) => { setToast(t); setTimeout(() => setToast(''), 2500); };
   const lastSynced = items.reduce((m, i) => i.last_synced && (!m || i.last_synced > m) ? i.last_synced : m, null);
