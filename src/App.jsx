@@ -13,6 +13,17 @@ import CloseView from './components/CloseView';
 // Initialize Supabase client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Missing env vars used to throw inside createClient and leave a blank white page.
+// Fail loudly instead so a misconfigured deploy says what is wrong.
+const MISSING_ENV = [!supabaseUrl && 'VITE_SUPABASE_URL', !supabaseKey && 'VITE_SUPABASE_ANON_KEY'].filter(Boolean);
+if (MISSING_ENV.length) {
+  document.body.innerHTML = `<div style="font-family:Inter,system-ui,sans-serif;padding:2rem;max-width:520px;margin:10vh auto;color:#FFFFE3;background:#4A4A4A;border-radius:12px">
+    <h2 style="margin:0 0 .5rem">Flip is not configured</h2>
+    <p>Missing environment variable${MISSING_ENV.length > 1 ? 's' : ''}: <code>${MISSING_ENV.join('</code>, <code>')}</code>.</p>
+    <p style="opacity:.8">Add them in Vercel → Project → Settings → Environment Variables, then redeploy. Vite bakes these in at build time, so a redeploy is required after adding them.</p>
+  </div>`;
+  throw new Error(`Missing env: ${MISSING_ENV.join(', ')}`);
+}
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // API base URL. In production the Express app is deployed as a Vercel function on the
