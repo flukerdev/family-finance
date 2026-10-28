@@ -89,6 +89,6 @@ export function buildFlow(lines, config, names, today = todayNY()) {
 export function upcoming(lines, today = todayNY(), days = 45) {
   const lim = new Date(`${today}T00:00:00`); lim.setDate(lim.getDate() + days);
   const limIso = lim.toISOString().slice(0, 10);
-  return lines.filter(l => l.active !== false && l.next_due && l.next_due <= limIso && (!l.end_date || l.end_date >= l.next_due))
+  return lines.filter(l => l.active !== false && !l.bucket.startsWith('income_') && l.next_due && l.next_due <= limIso && (!l.end_date || l.end_date >= l.next_due))
     .sort((a, b) => a.next_due.localeCompare(b.next_due));
 }
