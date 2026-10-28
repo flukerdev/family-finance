@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
     "cors": "^2.8.6",
+    "d3-sankey": "^0.12.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",

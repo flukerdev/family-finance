@@ -6,10 +6,12 @@ import Privacy from './Privacy';
 import CloseView from './components/CloseView';
 import PlaidLink from './components/PlaidLink';
 import AccountMappingUI from './components/AccountMappingUI';
+import FlowView from './components/FlowView';
+import { upcoming, advance, CADENCES } from './flow';
 
 // ─── Flip ────────────────────────────────────────────────────────────────────
-// Four screens: Home (what's due, where the money sits), Close (payoff + P&L),
-// Activity (transactions), Settings. No onboarding, no score, no charts to decode.
+// Five screens: Home (what's due, where the money sits), Close (payoff + P&L),
+// Flow (the Give/Save/Live picture, editable), Activity (transactions), Settings. No onboarding, no score, no charts to decode.
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -120,6 +122,7 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   const [snapshot, setSnapshot] = useState(null);
   const [summaries, setSummaries] = useState({});   // card_id -> payoff summary
   const [owed, setOwed] = useState(null);
+  const [flowLines, setFlowLines] = useState([]);
   const [syncing, setSyncing] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState('');
@@ -145,6 +148,7 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
     }));
     setSummaries(out);
   }, [cards]);
+  const loadFlow = useCallback(async () => { const { data } = await supabase.from('flow_lines').select('*'); setFlowLines(data || []); }, []);
   const loadOwed = useCallback(async () => { try { const r = await authFetch(`${API_URL}/api/payoff/reimbursements`); setOwed(await r.json()); } catch {} }, []);
 
   const sync = useCallback(async (force = false) => {
@@ -160,7 +164,7 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
 
   const refreshAll = useCallback(async (force = false) => {
     const c0 = await loadCards();
-    await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c0), loadOwed()]);   // paint what we have
+    await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c0), loadOwed(), loadFlow()]);   // paint what we have
     await sync(force);                                                                 // then talk to Plaid
     const c = await loadCards();
     await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c), loadOwed()]);
@@ -168,12 +172,12 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
 
   useEffect(() => { (async () => { await loadConfig(); await refreshAll(false); setLoaded(true); })(); }, []);
   // Coming back to Home after a payoff or a mapping change: re-read local state, no Plaid call.
-  useEffect(() => { if (view === 'home' && cards.length) { loadSummaries(cards); loadOwed(); loadSnapshot(); } }, [view]);
+  useEffect(() => { if (view === 'home' && cards.length) { loadSummaries(cards); loadOwed(); loadSnapshot(); loadFlow(); } }, [view]);
 
   const showToast = (t) => { setToast(t); setTimeout(() => setToast(''), 2500); };
   const lastSynced = items.reduce((m, i) => i.last_synced && (!m || i.last_synced > m) ? i.last_synced : m, null);
 
-  const props = { theme, s, session, config, setConfig, cards, items, snapshot, summaries, owed, syncing, loaded, lastSynced, personNames, bucketLabel, bucketColor,
+  const props = { theme, s, session, config, setConfig, cards, items, snapshot, summaries, owed, syncing, loaded, lastSynced, personNames, bucketLabel, bucketColor, flowLines, loadFlow,
     refreshAll, loadConfig, loadCards, loadItems, loadOwed, showToast, setView, setCloseCard, themeMode, setThemeMode };
 
   return (
@@ -185,12 +189,13 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
             config={{ person1Name: personNames.person1, person2Name: personNames.person2 }}
             onRefresh={async () => { await refreshAll(true); }} />
         )}
+        {view === 'flow' && <FlowView theme={theme} s={s} session={session} config={config} supabase={supabase} personNames={personNames} authFetch={authFetch} apiUrl={API_URL} showToast={showToast} />}
         {view === 'activity' && <Activity {...props} />}
         {view === 'settings' && <Settings {...props} />}
       </div>
       {toast && <div style={s.toast}>{toast}</div>}
       <nav style={s.nav}><div style={{ maxWidth: 560, margin: '0 auto', display: 'flex', justifyContent: 'space-around' }}>
-        {[['home', 'Home', 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'], ['close', 'Close', 'M20 6L9 17l-5-5'], ['activity', 'Activity', 'M4 6h16M4 12h16M4 18h16'], ['settings', 'Settings', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z']].map(([k, label, d]) => (
+        {[['home', 'Home', 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'], ['close', 'Close', 'M20 6L9 17l-5-5'], ['flow', 'Flow', 'M3 6h5l3 6 3-6h7M3 18h5l3-6 3 6h7'], ['activity', 'Activity', 'M4 6h16M4 12h16M4 18h16'], ['settings', 'Settings', 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z']].map(([k, label, d]) => (
           <button key={k} onClick={() => { setView(k); if (k !== 'close') setCloseCard(null); }} style={{ ...s.navBtn, color: view === k ? theme.accent : theme.textDimmed }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
             <span>{label}</span>
@@ -202,7 +207,13 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
 }
 
 // ─── Home ────────────────────────────────────────────────────────────────────
-function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced, bucketLabel, bucketColor, refreshAll, setView, setCloseCard, loaded }) {
+function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced, bucketLabel, bucketColor, refreshAll, setView, setCloseCard, loaded, flowLines, loadFlow, showToast }) {
+  const soon = upcoming(flowLines || []);
+  const markPaid = async (l) => {
+    const next = advance(l.next_due, l.cadence);
+    const { error } = await supabase.from('flow_lines').update(next ? { next_due: next } : { next_due: null, active: false }).eq('id', l.id);
+    if (error) return showToast(error.message); showToast(next ? `Next ${l.name}: ${fmtDate(next)}` : 'Done'); loadFlow();
+  };
   const byDue = [...cards].sort((a, b) => (summaries[a.card_id]?.readiness?.days_until_due ?? 99) - (summaries[b.card_id]?.readiness?.days_until_due ?? 99));
   return (
     <main style={{ padding: '0 1rem' }} className="fade">
@@ -242,6 +253,24 @@ function Home({ theme, s, cards, snapshot, summaries, owed, syncing, lastSynced,
           </button>
         );
       })}
+
+      {soon.length > 0 && <>
+        <div style={{ ...s.label, marginTop: '1rem' }}>Coming up</div>
+        {soon.map(l => {
+          const days = Math.round((new Date(`${l.next_due}T00:00:00`) - new Date(`${new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })}T00:00:00`)) / 86400000);
+          const tone = days < 0 ? theme.danger : days <= 7 ? theme.warning : theme.textMuted;
+          return (
+            <div key={l.id} style={{ ...s.card, ...s.row, borderBottom: 'none' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600 }}>{l.name}</div>
+                <div style={{ fontSize: '0.78rem', color: tone }}>{days < 0 ? `${-days}d overdue` : days === 0 ? 'due today' : `due ${fmtDate(l.next_due)} · ${days}d`}{l.paid_how ? <span style={{ color: theme.textDimmed }}> · {l.paid_how}</span> : null}</div>
+              </div>
+              <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginRight: 10 }}>{fmt(l.amount)}</div>
+              <button style={{ ...s.secondaryBtn, padding: '0.4rem 0.7rem', minHeight: 36, fontSize: '0.8rem' }} onClick={() => markPaid(l)}>Paid</button>
+            </div>
+          );
+        })}
+      </>}
 
       <div style={{ ...s.label, marginTop: '1rem' }}>Where the money sits</div>
       <div style={s.card}>

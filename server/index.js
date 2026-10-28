@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import payoffRouter from './payoff.js';
+import { registerFlowRoutes } from './flow.js';
 
 // Get the directory of the current file
 const __filename = fileURLToPath(import.meta.url);
@@ -163,6 +164,7 @@ const requireAuth = async (req, res, next) => {
 
 // Apply auth middleware to all /api routes
 app.use('/api', requireAuth);
+registerFlowRoutes(app);
 
 // ─── Test mode middleware ─────────────────────────────────────────────────────
 // When the frontend sends X-Test-Mode: true from localhost, this middleware
