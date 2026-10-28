@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0",
+    "@supabase/supabase-js": "^2.116.0",
     "cors": "^2.8.6",
     "d3-sankey": "^0.12.3",
     "dotenv": "^17.2.3",
