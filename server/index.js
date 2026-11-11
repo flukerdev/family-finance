@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { Configuration, PlaidApi, PlaidEnvironments } from 'plaid';
 import { createClient } from '@supabase/supabase-js';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import payoffRouter from './payoff.js';
 import { registerFlowRoutes } from './flow.js';
@@ -161,6 +162,48 @@ const requireAuth = async (req, res, next) => {
   req.userId = user.id;
   next();
 };
+
+// ─── Household unlock: one shared password, no email login ──────────────────
+// The browser sends the password; if it matches FLIP_PASSWORD (a Vercel env var)
+// the server mints a normal Supabase session for the household account and hands
+// it back. Everything downstream (RLS, user_id columns) keeps working unchanged.
+// FLIP_USER_EMAIL (optional) pins which Supabase user that is; otherwise we use
+// the user who owns the linked bank items.
+const sha = s => crypto.createHash('sha256').update(String(s)).digest();
+let householdEmail = null;
+const findHouseholdEmail = async () => {
+  if (process.env.FLIP_USER_EMAIL) return process.env.FLIP_USER_EMAIL;
+  if (householdEmail) return householdEmail;
+  const { data: { users } = {}, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+  if (error || !users?.length) throw new Error('No household account found');
+  let pick = users[0];
+  if (users.length > 1) {
+    const { data: items } = await supabaseAdmin.from('plaid_items').select('user_id');
+    const counts = {}; (items || []).forEach(r => { counts[r.user_id] = (counts[r.user_id] || 0) + 1; });
+    pick = users.slice().sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0))[0];
+  }
+  householdEmail = pick.email;
+  return householdEmail;
+};
+app.post('/api/unlock', strictLimiter, async (req, res) => {
+  const expected = process.env.FLIP_PASSWORD;
+  if (!expected) return res.status(500).json({ error: 'FLIP_PASSWORD is not set in Vercel' });
+  if (!supabaseAdmin) return res.status(500).json({ error: 'SUPABASE_SERVICE_ROLE_KEY is not set' });
+  const given = req.body?.password || '';
+  if (!crypto.timingSafeEqual(sha(given), sha(expected))) return res.status(401).json({ error: 'Wrong password' });
+  try {
+    const email = await findHouseholdEmail();
+    const { data: link, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({ type: 'magiclink', email });
+    if (linkErr) throw linkErr;
+    const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+    const { data, error } = await anon.auth.verifyOtp({ token_hash: link.properties.hashed_token, type: 'magiclink' });
+    if (error || !data?.session) throw error || new Error('No session');
+    res.json({ access_token: data.session.access_token, refresh_token: data.session.refresh_token });
+  } catch (e) {
+    console.error('unlock failed:', e.message);
+    res.status(500).json({ error: 'Could not unlock. Check the server logs.' });
+  }
+});
 
 // Apply auth middleware to all /api routes
 app.use('/api', requireAuth);

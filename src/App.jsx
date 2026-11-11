@@ -51,7 +51,11 @@ export default function App() {
 
   const [session, setSession] = useState(undefined);
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    supabase.auth.getSession().then(async ({ data }) => {
+      let at = 0; try { at = Number(localStorage.getItem(UNLOCK_KEY)) || 0; } catch {}
+      if (data.session && Date.now() - at > UNLOCK_DAYS * 864e5) { await supabase.auth.signOut(); return setSession(null); }
+      setSession(data.session || null);
+    });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, sess) => setSession(sess || null));
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -62,51 +66,34 @@ export default function App() {
   return <Shell theme={theme} s={s} session={session} themeMode={themeMode} setThemeMode={setThemeMode} />;
 }
 
-// ─── Auth: email + password, with reset ──────────────────────────────────────
+// ─── Lock screen: one household password (FLIP_PASSWORD in Vercel) ───────────
+const UNLOCK_KEY = 'flipUnlockedAt';
+const UNLOCK_DAYS = 30;
 function Auth({ theme, s }) {
-  const [mode, setMode] = useState(window.location.pathname === '/reset' ? 'reset' : 'login');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') setMode('reset'); });
-    return () => sub.subscription.unsubscribe();
-  }, []);
-  const go = async (fn) => { setBusy(true); setMsg(''); try { await fn(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
-  const login = () => go(async () => { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error; });
-  const signup = () => go(async () => {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error; setMsg('Account created. Check your email to confirm, then sign in.'); setMode('login');
-  });
-  const forgot = () => go(async () => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/reset` });
-    if (error) throw error; setMsg('Reset link sent. Open it on this device.');
-  });
-  const reset = () => go(async () => {
-    const { error } = await supabase.auth.updateUser({ password }); if (error) throw error;
-    window.history.replaceState({}, '', '/'); setMsg('Password updated.'); setMode('login');
-  });
+  const unlock = async () => {
+    if (!password || busy) return;
+    setBusy(true); setMsg('');
+    try {
+      const r = await fetch(`${API_URL}/api/unlock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not unlock');
+      try { localStorage.setItem(UNLOCK_KEY, String(Date.now())); } catch {}
+      const { error } = await supabase.auth.setSession({ access_token: j.access_token, refresh_token: j.refresh_token });
+      if (error) throw error;
+    } catch (e) { setMsg(e.message); setPassword(''); } finally { setBusy(false); }
+  };
   return (
     <Centered theme={theme}>
-      <div style={{ ...s.card, width: '100%', maxWidth: 380 }}>
+      <div style={{ ...s.card, width: '100%', maxWidth: 340 }}>
         <div style={{ fontSize: '1.6rem', fontWeight: 800, marginBottom: 2 }}>Flip</div>
-        <div style={{ color: theme.textMuted, fontSize: '0.85rem', marginBottom: '1rem' }}>
-          {mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create an account' : mode === 'forgot' ? 'Reset your password' : 'Choose a new password'}
-        </div>
-        {mode !== 'reset' && <input style={s.input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" />}
-        {mode !== 'forgot' && <input style={s.input} type="password" placeholder={mode === 'reset' ? 'New password' : 'Password'} value={password} onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && (mode === 'login' ? login() : mode === 'signup' ? signup() : reset())} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />}
-        <button disabled={busy} onClick={mode === 'login' ? login : mode === 'signup' ? signup : mode === 'forgot' ? forgot : reset} style={{ ...s.primaryBtn, width: '100%', marginTop: 4 }}>
-          {busy ? '…' : mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Save password'}
-        </button>
+        <div style={{ color: theme.textMuted, fontSize: '0.85rem', marginBottom: '1rem' }}>Enter the household password</div>
+        <input style={s.input} type="password" placeholder="Password" value={password} autoFocus
+          onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && unlock()} autoComplete="current-password" />
+        <button disabled={busy} onClick={unlock} style={{ ...s.primaryBtn, width: '100%', marginTop: 4 }}>{busy ? '…' : 'Unlock'}</button>
         {msg && <div style={{ ...s.note, marginTop: 10 }}>{msg}</div>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
-          {mode === 'login' ? <>
-            <button style={s.linkBtn} onClick={() => setMode('forgot')}>Forgot password</button>
-            <button style={s.linkBtn} onClick={() => setMode('signup')}>Create account</button>
-          </> : <button style={s.linkBtn} onClick={() => setMode('login')}>Back to sign in</button>}
-        </div>
       </div>
     </Centered>
   );
@@ -347,7 +334,6 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
   useEffect(() => { if (config) setForm({ ...config }); }, [config]);
   const [cardEdit, setCardEdit] = useState(null);
   const [mapKey, setMapKey] = useState(0);
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const saveConfig = async () => {
     const keys = ['person_1_name', 'person_2_name', 'cushion', ...LIVE_LINES.map(([k]) => k)];
@@ -365,10 +351,7 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
     if (!window.confirm(`Disconnect ${item.institution_name}? Its transactions stay; Plaid billing for it stops.`)) return;
     await authFetch(`${API_URL}/api/items/${item.item_id}`, { method: 'DELETE' }); await loadItems(); showToast('Disconnected');
   };
-  const deleteAccount = async () => {
-    const r = await authFetch(`${API_URL}/api/account`, { method: 'DELETE' });
-    if (r.ok) { await supabase.auth.signOut(); } else showToast('Could not delete');
-  };
+
   const num = (k, v) => setForm(f => ({ ...f, [k]: v === '' ? '' : Number(v) }));
   const livePlanTotal = form ? LIVE_LINES.reduce((t, [k]) => t + (Number(form[k]) || 0), 0) : 0;
 
@@ -457,12 +440,10 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
 
       <div style={s.label}>Account</div>
       <div style={s.card}>
-        <div style={{ fontSize: '0.85rem', color: theme.textMuted, marginBottom: 8 }}>{session.user.email}</div>
+        <div style={{ fontSize: '0.85rem', color: theme.textMuted, marginBottom: 8 }}>This device stays unlocked for {UNLOCK_DAYS} days. Change the password with FLIP_PASSWORD in Vercel.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button style={s.secondaryBtn} onClick={() => supabase.auth.signOut()}>Sign out</button>
+          <button style={s.secondaryBtn} onClick={() => { try { localStorage.removeItem(UNLOCK_KEY); } catch {} supabase.auth.signOut(); }}>Lock</button>
           <a href="/privacy" style={{ ...s.secondaryBtn, textDecoration: 'none', display: 'inline-block' }}>Privacy policy</a>
-          {!confirmDelete ? <button style={{ ...s.linkBtn, color: theme.danger }} onClick={() => setConfirmDelete(true)}>Delete account…</button>
-            : <button style={{ ...s.secondaryBtn, borderColor: theme.danger, color: theme.danger }} onClick={deleteAccount}>Really delete everything</button>}
         </div>
       </div>
     </main>
