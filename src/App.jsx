@@ -37,6 +37,12 @@ const relTime = iso => {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 2) return 'just now'; if (m < 60) return `${m} min ago`; const h = Math.round(m / 60); if (h < 24) return `${h} hr ago`; return `${Math.round(h / 24)} days ago`;
 };
+// Last-known data, kept on this device so the app paints instantly on open
+// and then refreshes in the background. Cleared when you hit Lock.
+const CACHE_KEY = 'flipCache:v1';
+const readCache = () => { try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch { return {}; } };
+const writeCache = (obj) => { try { localStorage.setItem(CACHE_KEY, JSON.stringify(obj)); } catch {} };
+const clearCache = () => { try { localStorage.removeItem(CACHE_KEY); } catch {} };
 const BUCKET_ORDER = ['live', 'person1', 'person2', 'give', 'save'];
 const LIVE_LINES = [
   ['monthly_rent', 'Mortgage + HOA'], ['monthly_power', 'Power'], ['monthly_groceries', 'Groceries'], ['monthly_gas', 'Gas'],
@@ -53,7 +59,7 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       let at = 0; try { at = Number(localStorage.getItem(UNLOCK_KEY)) || 0; } catch {}
-      if (data.session && Date.now() - at > UNLOCK_DAYS * 864e5) { await supabase.auth.signOut(); return setSession(null); }
+      if (data.session && Date.now() - at > UNLOCK_DAYS * 864e5) { clearCache(); await supabase.auth.signOut(); return setSession(null); }
       setSession(data.session || null);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, sess) => setSession(sess || null));
@@ -103,15 +109,16 @@ function Auth({ theme, s }) {
 function Shell({ theme, s, session, themeMode, setThemeMode }) {
   const [view, setView] = useState('home');
   const [closeCard, setCloseCard] = useState(null);
-  const [config, setConfig] = useState(null);
-  const [cards, setCards] = useState([]);
-  const [items, setItems] = useState([]);
-  const [snapshot, setSnapshot] = useState(null);
-  const [summaries, setSummaries] = useState({});   // card_id -> payoff summary
-  const [owed, setOwed] = useState(null);
-  const [flowLines, setFlowLines] = useState([]);
+  const cached = useMemo(readCache, []);
+  const [config, setConfig] = useState(cached.config || null);
+  const [cards, setCards] = useState(cached.cards || []);
+  const [items, setItems] = useState(cached.items || []);
+  const [snapshot, setSnapshot] = useState(cached.snapshot || null);
+  const [summaries, setSummaries] = useState(cached.summaries || {});   // card_id -> payoff summary
+  const [owed, setOwed] = useState(cached.owed || null);
+  const [flowLines, setFlowLines] = useState(cached.flowLines || []);
   const [syncing, setSyncing] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(!!cached.cards);
   const [toast, setToast] = useState('');
 
   const personNames = { person1: config?.person_1_name || 'Person 1', person2: config?.person_2_name || 'Person 2' };
@@ -152,12 +159,15 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   const refreshAll = useCallback(async (force = false) => {
     const c0 = await loadCards();
     await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c0), loadOwed(), loadFlow()]);   // paint what we have
+    setLoaded(true);
     await sync(force);                                                                 // then talk to Plaid
     const c = await loadCards();
     await Promise.all([loadItems(), loadSnapshot(), loadSummaries(c), loadOwed()]);
   }, [sync, loadCards, loadItems, loadSnapshot, loadSummaries, loadOwed]);
 
-  useEffect(() => { (async () => { await loadConfig(); await refreshAll(false); setLoaded(true); })(); }, []);
+  useEffect(() => { loadConfig(); refreshAll(false).finally(() => setLoaded(true)); }, []);
+  // Save what's on screen so the next open paints instantly.
+  useEffect(() => { if (cards.length) writeCache({ config, cards, items, snapshot, summaries, owed, flowLines }); }, [config, cards, items, snapshot, summaries, owed, flowLines]);
   // Coming back to Home after a payoff or a mapping change: re-read local state, no Plaid call.
   useEffect(() => { if (view === 'home' && cards.length) { loadSummaries(cards); loadOwed(); loadSnapshot(); loadFlow(); } }, [view]);
 
@@ -442,7 +452,7 @@ function Settings({ theme, s, session, config, cards, items, personNames, loadCo
       <div style={s.card}>
         <div style={{ fontSize: '0.85rem', color: theme.textMuted, marginBottom: 8 }}>This device stays unlocked for {UNLOCK_DAYS} days. Change the password with FLIP_PASSWORD in Vercel.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button style={s.secondaryBtn} onClick={() => { try { localStorage.removeItem(UNLOCK_KEY); } catch {} supabase.auth.signOut(); }}>Lock</button>
+          <button style={s.secondaryBtn} onClick={() => { try { localStorage.removeItem(UNLOCK_KEY); } catch {} clearCache(); supabase.auth.signOut(); }}>Lock</button>
           <a href="/privacy" style={{ ...s.secondaryBtn, textDecoration: 'none', display: 'inline-block' }}>Privacy policy</a>
         </div>
       </div>
