@@ -174,16 +174,21 @@ let householdEmail = null;
 const findHouseholdEmail = async () => {
   if (process.env.FLIP_USER_EMAIL) return process.env.FLIP_USER_EMAIL;
   if (householdEmail) return householdEmail;
-  const { data: { users } = {}, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-  if (error || !users?.length) throw new Error('No household account found');
-  let pick = users[0];
-  if (users.length > 1) {
-    const { data: items } = await supabaseAdmin.from('plaid_items').select('user_id');
-    const counts = {}; (items || []).forEach(r => { counts[r.user_id] = (counts[r.user_id] || 0) + 1; });
-    pick = users.slice().sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0))[0];
+  // Prefer the user who owns the household's data (bank links, then settings).
+  for (const table of ['plaid_items', 'app_config', 'credit_cards']) {
+    const { data, error } = await supabaseAdmin.from(table).select('user_id').limit(50);
+    if (error) { console.error(`unlock: read ${table} failed:`, error.message); continue; }
+    const counts = {}; (data || []).forEach(r => r.user_id && (counts[r.user_id] = (counts[r.user_id] || 0) + 1));
+    const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    if (!top) continue;
+    const { data: u, error: uErr } = await supabaseAdmin.auth.admin.getUserById(top);
+    if (uErr) { console.error('unlock: getUserById failed:', uErr.message); continue; }
+    if (u?.user?.email) return (householdEmail = u.user.email);
   }
-  householdEmail = pick.email;
-  return householdEmail;
+  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+  if (error) throw new Error(`listUsers failed: ${error.message}`);
+  if (!data?.users?.length) throw new Error('No household account found (no users in Supabase auth)');
+  return (householdEmail = data.users[0].email);
 };
 app.post('/api/unlock', strictLimiter, async (req, res) => {
   const expected = process.env.FLIP_PASSWORD;
