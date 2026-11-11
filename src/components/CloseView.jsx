@@ -323,7 +323,7 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
             ))}
           </div>
 
-          <button onClick={() => setShowCharges(v => !v)} style={s.linkBtn}>{showCharges ? 'Hide' : 'Show'} all {data.transactions.length} charges{data.payments?.length ? ` (${data.payments.length} payment${data.payments.length > 1 ? 's' : ''} excluded)` : ''} {showCharges ? '▾' : '▸'}</button>
+          <button onClick={() => setShowCharges(v => !v)} style={s.linkBtn}>{showCharges ? 'Hide' : 'Show / edit'} all {data.transactions.length} charges{data.payments?.length ? ` (${data.payments.length} payment${data.payments.length > 1 ? 's' : ''} excluded)` : ''} {showCharges ? '▾' : '▸'}</button>
           {showCharges && data.transactions.map(t => (
             <div key={t.plaid_transaction_id} style={s.txnRow}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -371,16 +371,40 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
 function ReviewStack({ queue, bucketMeta, theme, s, onPick, onClose }) {
   const [i, setI] = useState(0);
   const [items] = useState(queue);
+  const [picks, setPicks] = useState({});           // plaid_transaction_id -> bucket you chose this session
+  useEffect(() => { if (!items.length) onClose(); }, []);
+  if (!items.length) return null;
+  const pick = async (txn, b) => { setPicks(p => ({ ...p, [txn.plaid_transaction_id]: b })); setI(n => n + 1); await onPick(txn, b); };
+
+  // ── Recap: every pick from this pass, tap any to go back and change it ──
+  if (i >= items.length) return (
+    <div style={{ ...s.sheetBackdrop, alignItems: 'center' }} onClick={onClose}>
+      <div style={{ ...s.sheet, borderRadius: 18, maxWidth: 440, margin: '0 1rem', maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: '1.15rem', fontWeight: 700 }}>All set</div>
+        <div style={{ fontSize: '0.8rem', color: theme.textMuted, margin: '0.2rem 0 0.75rem' }}>Tap any charge to change its bucket.</div>
+        {items.map((txn, k) => { const b = picks[txn.plaid_transaction_id]; return (
+          <button key={txn.plaid_transaction_id} onClick={() => setI(k)} style={{ ...s.txnRow, width: '100%', background: 'none', border: 'none', borderBottom: `1px solid ${theme.border || theme.cardBgElevated}`, color: theme.text, cursor: 'pointer', textAlign: 'left', padding: '0.55rem 0' }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.merchant_name || txn.name}</span>
+            <span style={{ margin: '0 8px', fontVariantNumeric: 'tabular-nums' }}>{fmt(Math.abs(txn.amount))}</span>
+            <span style={{ ...s.bucketTag, marginTop: 0, background: b ? bucketMeta[b]?.color : theme.cardBgElevated, color: b ? theme.onAccent : theme.textMuted }}>{b ? bucketMeta[b]?.label : 'Skipped'}</span>
+          </button>
+        ); })}
+        <button onClick={onClose} style={{ ...s.primaryBtn, width: '100%', marginTop: '1rem' }}>Done</button>
+      </div>
+    </div>
+  );
+
   const txn = items[i];
-  useEffect(() => { if (!txn) onClose(); }, [txn]);
-  if (!txn) return null;
-  const pick = async (b) => { await onPick(txn, b); setI(n => n + 1); };
+  const chosen = picks[txn.plaid_transaction_id];
+  const highlighted = chosen || (txn.source !== 'default' ? txn.bucket : null);
   let cat = null; try { cat = JSON.parse(txn.personal_finance_category || 'null'); } catch {}
   return (
-    <div style={{ ...s.sheetBackdrop, alignItems: 'center' }} onClick={onClose}>
+    <div style={{ ...s.sheetBackdrop, alignItems: 'center' }} onClick={() => setI(items.length)}>
       <div style={{ ...s.sheet, borderRadius: 18, maxWidth: 440, margin: '0 1rem' }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: theme.textMuted, marginBottom: '0.75rem' }}>
-          <span>{i + 1} of {items.length}</span><button onClick={onClose} style={{ ...s.linkBtn, padding: 0 }}>Done for now</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: theme.textMuted, marginBottom: '0.75rem' }}>
+          <button onClick={() => setI(n => Math.max(0, n - 1))} disabled={i === 0} style={{ ...s.linkBtn, padding: 0, opacity: i === 0 ? 0.3 : 1 }}>‹ Back</button>
+          <span>{i + 1} of {items.length}</span>
+          <button onClick={() => setI(items.length)} style={{ ...s.linkBtn, padding: 0 }}>Done for now</button>
         </div>
         <div style={{ height: 4, background: theme.cardBgElevated, borderRadius: 2, marginBottom: '1rem' }}><div style={{ width: `${(i / items.length) * 100}%`, height: '100%', background: theme.accent, borderRadius: 2, transition: 'width .2s' }} /></div>
         <div style={{ fontSize: '0.75rem', color: theme.textMuted }}>{fmtDateLong(txn.date)}{cat?.primary ? ` · ${titleCase(cat.primary)}` : ''}</div>
@@ -390,17 +414,17 @@ function ReviewStack({ queue, bucketMeta, theme, s, onPick, onClose }) {
         )}
         <div style={{ fontSize: '2rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: txn.amount < 0 ? theme.success : theme.text }}>{txn.amount < 0 ? '+' : ''}{fmt(Math.abs(txn.amount))}</div>
         <div style={{ fontSize: '0.8rem', color: theme.textMuted, margin: '0.5rem 0 0.75rem' }}>
-          {txn.source === 'rule' ? `Guess: ${bucketMeta[txn.bucket]?.label} (rule "${txn.rule_pattern}", still learning). Confirm or correct.` : 'Who pays for this?'}
+          {chosen ? `You picked ${bucketMeta[chosen]?.label}. Tap another to change it.` : txn.source === 'rule' ? `Guess: ${bucketMeta[txn.bucket]?.label} (rule "${txn.rule_pattern}", still learning). Confirm or correct.` : 'Who pays for this?'}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
           {BUCKET_ORDER.map(b => (
-            <button key={b} onClick={() => pick(b)}
-              style={{ ...s.secondaryBtn, padding: '0.85rem', fontSize: '1rem', borderColor: bucketMeta[b].color, ...(txn.bucket === b && txn.source !== 'default' ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
+            <button key={b} onClick={() => pick(txn, b)}
+              style={{ ...s.secondaryBtn, padding: '0.85rem', fontSize: '1rem', borderColor: bucketMeta[b].color, ...(highlighted === b ? { background: bucketMeta[b].color, color: theme.onAccent } : {}) }}>
               {bucketMeta[b].label}
             </button>
           ))}
         </div>
-        <button onClick={() => setI(n => n + 1)} style={{ ...s.linkBtn, width: '100%', marginTop: '0.75rem' }}>Skip this one</button>
+        <button onClick={() => setI(n => n + 1)} style={{ ...s.linkBtn, width: '100%', marginTop: '0.75rem' }}>{chosen ? 'Keep it, next' : 'Skip this one'}</button>
       </div>
     </div>
   );
