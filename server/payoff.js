@@ -16,9 +16,11 @@ import { Router } from 'express';
 
 const router = Router();
 
-export const BUCKETS = ['give', 'save', 'live', 'person1', 'person2', 'marriage_starter', 'venmo'];
+export const BUCKETS = ['give', 'save', 'live', 'person1', 'person2', 'marriage_starter', 'venmo', 'reimbursed'];
 // 'venmo' = someone is paying this back on Venmo; that cash covers it. Never learned as a rule.
-export const NO_RULE_BUCKETS = ['venmo'];
+// 'reimbursed' = a work/expense reimbursement came in with the paycheck and the payday split
+// spread it across buckets, so the charge is paid back from Give/Save/Live in those same percentages.
+export const NO_RULE_BUCKETS = ['venmo', 'reimbursed'];
 // Buckets that take days to move money out of (brokerage cash). A transfer from one of these can
 // be "fronted": Save pays the paying account today, and the slow bucket reimburses Save later.
 export const SLOW_SOURCES = ['marriage_starter'];
@@ -136,15 +138,25 @@ async function attachConfidence(supabase, rules) {
 }
 
 // Sum by bucket, then turn that into the transfers needed into the paying account.
-export function buildTransfers(allocated, payingBucket) {
+export function buildTransfers(allocated, payingBucket, split = {}) {
   const totals = {};
   for (const t of allocated) totals[t.bucket] = num((totals[t.bucket] || 0) + Number(t.amount));
-  const transfers = Object.entries(totals)
+  // Spread 'reimbursed' back over the buckets the payday split sent that money to.
+  const sources = { ...totals };
+  let reimbursedSplit = null;
+  if (totals.reimbursed) {
+    const r = totals.reimbursed;
+    const g = num(r * (split.give ?? 0.2)), s = num(r * (split.save ?? 0.15)), l = num(r - g - s);
+    delete sources.reimbursed;
+    sources.give = num((sources.give || 0) + g); sources.save = num((sources.save || 0) + s); sources.live = num((sources.live || 0) + l);
+    reimbursedSplit = { total: r, give: g, save: s, live: l, give_pct: split.give ?? 0.2, save_pct: split.save ?? 0.15 };
+  }
+  const transfers = Object.entries(sources)
     .filter(([b, amt]) => b !== payingBucket && amt > 0)
     .map(([b, amt]) => ({ from: b, to: payingBucket, amount: amt }))
     .sort((a, b) => b.amount - a.amount);
   const total = num(Object.values(totals).reduce((s, v) => s + v, 0));
-  return { totals, transfers, total };
+  return { totals, transfers, total, reimbursedSplit };
 }
 
 async function loadRulesAndOverrides(supabase, txnIds) {
@@ -328,7 +340,7 @@ router.get('/payoff/:card_id', async (req, res) => {
     const [{ data: txns, error: txnErr }, { data: snap }, { data: cfg }] = await Promise.all([
       cardTxnQuery(req.supabase, cardId, start, end),
       req.supabase.from('balance_snapshots').select('buckets, cards, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      req.supabase.from('app_config').select('cushion').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      req.supabase.from('app_config').select('cushion, split_give, split_save').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     ]);
     if (txnErr) return res.status(500).json({ error: txnErr.message });
 
@@ -340,7 +352,8 @@ router.get('/payoff/:card_id', async (req, res) => {
     const list = posted.filter(t => !isPayment(t));
     const { rules, overrides } = await loadRulesAndOverrides(req.supabase, list.map(t => t.plaid_transaction_id));
     const allocated = allocateTransactions(list, { rules, overrides, defaultBucket: payingBucket, cardId });
-    const { totals, transfers: rawTransfers, total } = buildTransfers(allocated, payingBucket);
+    const { totals, transfers: rawTransfers, total, reimbursedSplit } = buildTransfers(allocated, payingBucket,
+      { give: cfg?.split_give != null ? Number(cfg.split_give) : undefined, save: cfg?.split_save != null ? Number(cfg.split_save) : undefined });
     const frontFrom = prior && prior.transfers && !Array.isArray(prior.transfers) ? prior.transfers.front_from || null : null;
     const routed = routeTransfers(rawTransfers, frontFrom);
     const transfers = routed.plan;
@@ -395,6 +408,7 @@ router.get('/payoff/:card_id', async (req, res) => {
       card,
       period: { start, end, due: prior?.due_date || computed.due, computed: start === computed.start && end === computed.end, pinned: !!prior },
       paying_bucket: payingBucket,
+      reimbursed_split: reimbursedSplit,
       transactions: allocated,
       pending_count: (txns || []).length - list.length,
       totals,

@@ -4,7 +4,7 @@ import { cardColor } from '../theme';
 // ─── Close view: Payoff (per card) + P&L (per calendar month) ────────────────
 // Everything here reads from /api/payoff/* and /api/pnl. Money never moves.
 
-const BUCKET_ORDER = ['live', 'person1', 'person2', 'give', 'save', 'marriage_starter', 'venmo'];
+const BUCKET_ORDER = ['live', 'person1', 'person2', 'give', 'save', 'marriage_starter', 'venmo', 'reimbursed'];
 const fmt = n => (Number(n) || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const fmtDate = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
 const fmtDateLong = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
@@ -22,6 +22,7 @@ export default function CloseView({ theme, authFetch, apiUrl, creditCards, confi
     save: { label: 'Save', color: theme.save },
     marriage_starter: { label: 'Marriage Starter', color: theme.accent },
     venmo: { label: 'Venmo', color: '#3D95CE' },
+    reimbursed: { label: 'Reimbursed', color: theme.success },
   }), [theme, config.person1Name, config.person2Name]);
 
   const s = useMemo(() => makeStyles(theme), [theme]);
@@ -297,6 +298,11 @@ function Payoff({ theme, s, authFetch, apiUrl, creditCards, bucketMeta, onRefres
                   <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(t.amount)}</strong>
                 </div>
               ))}
+            {data.reimbursed_split && (
+              <div style={{ ...s.note, marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                Includes {fmt(data.reimbursed_split.total)} reimbursed, pulled back the way payday split it: Give {fmt(data.reimbursed_split.give)} ({Math.round(data.reimbursed_split.give_pct * 100)}%), Save {fmt(data.reimbursed_split.save)} ({Math.round(data.reimbursed_split.save_pct * 100)}%), Live {fmt(data.reimbursed_split.live)}.
+              </div>
+            )}
             {data.routing?.can_front && !data.completed && (
               <button onClick={() => setRoute(!data.routing.front_from)} style={{ ...s.secondaryBtn, width: '100%', marginTop: '0.5rem', borderColor: theme.warning, fontSize: '0.85rem' }}>
                 {data.routing.front_from ? 'Undo: pay from Marriage Starter directly' : 'Need the cash now: front it from Save'}
