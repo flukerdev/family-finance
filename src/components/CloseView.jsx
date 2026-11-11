@@ -4,7 +4,7 @@ import { cardColor } from '../theme';
 // ─── Close view: Payoff (per card) + P&L (per calendar month) ────────────────
 // Everything here reads from /api/payoff/* and /api/pnl. Money never moves.
 
-const BUCKET_ORDER = ['live', 'person1', 'person2', 'give', 'save', 'marriage_starter'];
+const BUCKET_ORDER = ['live', 'person1', 'person2', 'give', 'save', 'marriage_starter', 'venmo'];
 const fmt = n => (Number(n) || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const fmtDate = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
 const fmtDateLong = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
@@ -21,6 +21,7 @@ export default function CloseView({ theme, authFetch, apiUrl, creditCards, confi
     give: { label: 'Give', color: theme.give },
     save: { label: 'Save', color: theme.save },
     marriage_starter: { label: 'Marriage Starter', color: theme.accent },
+    venmo: { label: 'Venmo', color: '#3D95CE' },
   }), [theme, config.person1Name, config.person2Name]);
 
   const s = useMemo(() => makeStyles(theme), [theme]);

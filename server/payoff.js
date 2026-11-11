@@ -16,7 +16,9 @@ import { Router } from 'express';
 
 const router = Router();
 
-export const BUCKETS = ['give', 'save', 'live', 'person1', 'person2', 'marriage_starter'];
+export const BUCKETS = ['give', 'save', 'live', 'person1', 'person2', 'marriage_starter', 'venmo'];
+// 'venmo' = someone is paying this back on Venmo; that cash covers it. Never learned as a rule.
+export const NO_RULE_BUCKETS = ['venmo'];
 // Buckets that take days to move money out of (brokerage cash). A transfer from one of these can
 // be "fronted": Save pays the paying account today, and the slow bucket reimburses Save later.
 export const SLOW_SOURCES = ['marriage_starter'];
@@ -207,7 +209,7 @@ router.post('/payoff/allocate', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   let rule = null;
-  if (save_rule) {
+  if (save_rule && !NO_RULE_BUCKETS.includes(bucket)) {
     const { data: txn } = await req.supabase.from('transactions')
       .select('merchant_name, name').eq('plaid_transaction_id', plaid_transaction_id).maybeSingle();
     const pattern = (txn?.merchant_name || txn?.name || '').trim();

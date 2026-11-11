@@ -122,8 +122,8 @@ function Shell({ theme, s, session, themeMode, setThemeMode }) {
   const [toast, setToast] = useState('');
 
   const personNames = { person1: config?.person_1_name || 'Person 1', person2: config?.person_2_name || 'Person 2' };
-  const bucketLabel = b => ({ live: 'Live', give: 'Give', save: 'Save', person1: personNames.person1, person2: personNames.person2, marriage_starter: 'Marriage Starter' })[b] || b;
-  const bucketColor = b => ({ live: theme.live, give: theme.give, save: theme.save, person1: theme.mat, person2: theme.mara })[b] || theme.accent;
+  const bucketLabel = b => ({ live: 'Live', give: 'Give', save: 'Save', person1: personNames.person1, person2: personNames.person2, marriage_starter: 'Marriage Starter', venmo: 'Venmo' })[b] || b;
+  const bucketColor = b => ({ live: theme.live, give: theme.give, save: theme.save, person1: theme.mat, person2: theme.mara, venmo: '#3D95CE' })[b] || theme.accent;
 
   const loadConfig = useCallback(async () => {
     const { data } = await supabase.from('app_config').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle();
